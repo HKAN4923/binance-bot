@@ -84,10 +84,11 @@ def get_balance():
             return float(b['balance'])
     return 0.0
 
-# 주문 수량 계산 (high:80%, low:20%)
+# 주문 수량 계산 (high:30%, low:10%)
 def calc_qty(price, confidence):
     bal = get_balance()
-    alloc = bal * (0.8 if confidence == 'high' else 0.2)
+    # 임시 진입 장벽: high -> 30%, low -> 10%
+    alloc = bal * (0.3 if confidence == 'high' else 0.1)
     return round(alloc / price, 6)
 
 # 반대 방향 시그널 확인 후 탈출 판단
@@ -122,7 +123,7 @@ def execute_trade(symbol, side, price, confidence):
     with positions_lock:
         current_positions += 1
 
-    # 반대 시그널 확인 루프
+    # 포지션 진입 후 1초 단위 반대 신호 체크
     while True:
         df_check = get_df(symbol, '30m')
         if opposite_signal(df_check, side):
@@ -130,7 +131,7 @@ def execute_trade(symbol, side, price, confidence):
                                         side=SIDE_SELL if side=='LONG' else SIDE_BUY,
                                         type=ORDER_TYPE_MARKET,
                                         quantity=qty)
-            msg = f"{symbol} 반대 시그널 발생으로 청산"
+            msg = f"{symbol} 반대 시그널 발생으로 즉시 청산"
             send_telegram(msg)
             log(msg)
             with positions_lock:
@@ -140,8 +141,8 @@ def execute_trade(symbol, side, price, confidence):
 
 # 메인 실행
 if __name__ == '__main__':
-    print("🔮 Bot started (완화된 기준, 25개 심볼, 반대시그널 탈출 포함)")
-    send_telegram("🤖 Bot started: 30m/1h 신호 기반")
+    print("🔮 Bot started (임시 진입 30/10%, 25개 심볼)")
+    send_telegram("🤖 Bot started (30m/1h 신호 기반, 임시 진입 30/10%)")
 
     while True:
         print(f"[{datetime.now():%H:%M:%S}] 새 사이클 시작...")
