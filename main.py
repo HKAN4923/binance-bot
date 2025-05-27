@@ -3,7 +3,7 @@ import time
 import threading
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 from binance.client import Client
 from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
@@ -12,40 +12,27 @@ from ta.trend import EMAIndicator, MACD, ADXIndicator
 import requests
 import logging
 
-# 로그 설정
-logging.basicConfig(filename='trade_log.txt', level=logging.INFO, format='%(asctime)s - %(message)s')
-
-def log(msg):
-    print(msg)
-    logging.info(msg)
+# 설정값
+RR_RATIO = 1.3           # 리스크-리워드 비율 1:1.3 (보수적)
+LEVERAGE = 10
+SLEEP_INTERVAL = 10
+MAX_CONCURRENT = 1
 
 # 환경 변수 로드
 load_dotenv()
-API_KEY          = os.getenv("BINANCE_API_KEY")
-API_SECRET       = os.getenv("BINANCE_API_SECRET")
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# 바이낸스 클라이언트
+# Binance client
 client = Client(API_KEY, API_SECRET)
 
-# 심볼 리스트 (30개)
-symbols = [
-    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","ADAUSDT","XRPUSDT",
-    "DOGEUSDT","DOTUSDT","MATICUSDT","LTCUSDT","LINKUSDT","UNIUSDT",
-    "BCHUSDT","ETCUSDT","XLMUSDT","AAVEUSDT","MKRUSDT","COMPUSDT",
-    "SUSHIUSDT","AVAXUSDT","FILUSDT","ATOMUSDT","EOSUSDT","THETAUSDT",
-    "TRXUSDT","NEARUSDT","ALGOUSDT","FTMUSDT","KSMUSDT","XTZUSDT"
-]
-
-# 설정 값
-LEVERAGE         = 10
-FORCE_HOURS      = 4
-SLEEP_INTERVAL   = 10    # 대기시간 10초
-MAX_CONCURRENT   = 1     # 포지션 1개 제한
-
-current_positions = 0
-positions_lock    = threading.Lock()
+# 로깅
+logging.basicConfig(filename='trade_log.txt', level=logging.INFO, format='%(asctime)s - %(message)s')
+def log(msg):
+    print(msg)
+    logging.info(msg)
 
 def send_telegram(msg):
     try:
@@ -54,119 +41,105 @@ def send_telegram(msg):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-def get_df(sym):
-    data = client.futures_klines(symbol=sym, interval="5m", limit=100)
-    df = pd.DataFrame(data, columns=["t","o","h","l","c","v","ct","qav","nt","tbb","tbq","i"])
-    for col in ["o","h","l","c"]:
+# 심볼 리스트
+symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+
+current_positions = 0
+positions_lock = threading.Lock()
+
+def get_df(symbol, interval):
+    klines = client.futures_klines(symbol=symbol, interval=interval, limit=100)
+    df = pd.DataFrame(klines, columns=["t","o","h","l","c","v","ct","qav","nt","tbb","tbq","i"])
+    for col in ["o", "h", "l", "c"]:
         df[col] = df[col].astype(float)
-    df['rsi']   = RSIIndicator(df['c'], window=14).rsi()
-    df['macd']  = MACD(df['c']).macd_diff()
-    df['ema9']  = EMAIndicator(df['c'], window=9).ema_indicator()
+    df['rsi'] = RSIIndicator(df['c'], window=14).rsi()
+    df['macd'] = MACD(df['c']).macd_diff()
+    df['ema9'] = EMAIndicator(df['c'], window=9).ema_indicator()
     df['ema21'] = EMAIndicator(df['c'], window=21).ema_indicator()
-    df['adx']   = ADXIndicator(df['h'], df['l'], df['c'], window=14).adx()
+    df['adx'] = ADXIndicator(df['h'], df['l'], df['c'], window=14).adx()
     df['stoch'] = StochasticOscillator(df['h'], df['l'], df['c'], window=14).stoch()
-    df['swing_high'] = df['h'].rolling(20).max()
-    df['swing_low']  = df['l'].rolling(20).min()
     return df
 
 def check_signal(df):
     last = df.iloc[-1]
-    if last['adx'] < 20:
+    if last['adx'] < 15:
         return None
-    if last['rsi'] < 30 and last['macd'] > 0 and last['c'] > last['ema9'] and last['stoch'] < 20:
+    if last['rsi'] < 35 and last['macd'] > 0 and last['c'] > last['ema9'] and last['stoch'] < 30:
         return 'LONG'
-    if last['rsi'] > 70 and last['macd'] < 0 and last['c'] < last['ema9'] and last['stoch'] > 80:
+    if last['rsi'] > 65 and last['macd'] < 0 and last['c'] < last['ema9'] and last['stoch'] > 70:
         return 'SHORT'
     return None
 
 def get_balance():
     for b in client.futures_account_balance():
-        if b['asset']=='USDT':
+        if b['asset'] == 'USDT':
             return float(b['balance'])
     return 0.0
 
-def calc_qty(price, risk_pct=0.2):
+def calc_qty(price, confidence):
     bal = get_balance()
-    risk_amt = bal * risk_pct
-    return round(risk_amt / price, 6)
+    risk_amt = bal * (0.2 if confidence == 'low' else 0.8)
+    return round(risk_amt / price, 3)
 
-def execute_trade(sym, side, df):
+def execute_trade(symbol, side, price, confidence):
     global current_positions
-    client.futures_change_leverage(symbol=sym, leverage=LEVERAGE)
-    price = float(client.futures_mark_price(sym)['markPrice'])
-    qty   = calc_qty(price)
-    order_side = SIDE_BUY if side=='LONG' else SIDE_SELL
-    client.futures_create_order(symbol=sym, side=order_side, type=ORDER_TYPE_MARKET, quantity=qty)
-    last = df.iloc[-1]
-    if side=='LONG':
-        tp, sl = last['swing_high'], last['swing_low']
-    else:
-        tp, sl = last['swing_low'], last['swing_high']
-    tp = min(max(tp, price*1.01), price*1.05)
-    sl = max(min(sl, price*0.99), price*0.95)
-    client.futures_create_order(symbol=sym,
-                                side=SIDE_SELL if side=='LONG' else SIDE_BUY,
-                                type="TAKE_PROFIT_MARKET", stopPrice=round(tp,2), closePosition=True)
-    client.futures_create_order(symbol=sym,
-                                side=SIDE_SELL if side=='LONG' else SIDE_BUY,
-                                type="STOP_MARKET", stopPrice=round(sl,2), closePosition=True)
-    msg = f"{sym} {side} @ {price:.2f}  TP:{tp:.2f}, SL:{sl:.2f}"
+    qty = calc_qty(price, confidence)
+    client.futures_change_leverage(symbol=symbol, leverage=LEVERAGE)
+    order_side = SIDE_BUY if side == 'LONG' else SIDE_SELL
+    client.futures_create_order(symbol=symbol, side=order_side, type=ORDER_TYPE_MARKET, quantity=qty)
+
+    # 손절 2%, 리스크리워드 1:1.2
+    sl_price = price * 0.98 if side == 'LONG' else price * 1.02
+    tp_price = price + (abs(price - sl_price) * RR_RATIO) if side == 'LONG' else price - (abs(price - sl_price) * RR_RATIO)
+
+    client.futures_create_order(
+        symbol=symbol,
+        side=SIDE_SELL if side == 'LONG' else SIDE_BUY,
+        type="TAKE_PROFIT_MARKET",
+        stopPrice=round(tp_price, 2),
+        closePosition=True
+    )
+    client.futures_create_order(
+        symbol=symbol,
+        side=SIDE_SELL if side == 'LONG' else SIDE_BUY,
+        type="STOP_MARKET",
+        stopPrice=round(sl_price, 2),
+        closePosition=True
+    )
+
+    msg = f"✅ {symbol} {side} 진입! 진입가: {price:.2f}, 익절: {tp_price:.2f}, 손절: {sl_price:.2f} ({confidence})"
     send_telegram(msg)
     log(msg)
     with positions_lock:
         current_positions += 1
-    return price, qty, side
 
-def monitor_position(sym, entry_price, qty, side):
-    global current_positions
-    start = datetime.now()
-    max_hold = timedelta(hours=FORCE_HOURS)
-    try:
-        while True:
-            time.sleep(30)
-            price = float(client.futures_mark_price(sym)['markPrice'])
-            df = get_df(sym)
-            new_sig = check_signal(df)
-            if df['adx'].iloc[-1] < 15:
-                client.futures_create_order(symbol=sym,
-                                            side=SIDE_SELL if side=='LONG' else SIDE_BUY,
-                                            type=ORDER_TYPE_MARKET, quantity=qty/2)
-                send_telegram(f"Sideway exit 50% {sym} @ {price:.2f}")
-                log(f"Sideway exit 50% {sym} @ {price:.2f}")
-                break
-            if datetime.now() - start > max_hold and new_sig != side:
-                client.futures_create_order(symbol=sym,
-                                            side=SIDE_SELL if side=='LONG' else SIDE_BUY,
-                                            type=ORDER_TYPE_MARKET, quantity=qty)
-                send_telegram(f"Force close {sym} @ {price:.2f}")
-                log(f"Force close {sym} @ {price:.2f}")
-                break
-    finally:
-        with positions_lock:
-            current_positions -= 1
-
-# 메인 루프
-if __name__=='__main__':
-    print("🔮 Bot is running…")
-    send_telegram("🔮 Bot started (1 position max, 10s interval)")
-    total_wait = 0
+def main():
+    print("🔮 Bot started (entry by 30m or 1h signal) ...")
+    send_telegram("🤖 Binance bot 시작됨 (30분 또는 1시간 시그널 기반)")
     while True:
-        print(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] === 새 사이클 시작 ===")
-        for sym in symbols:
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] === 새 사이클 ===")
+        for symbol in symbols:
             with positions_lock:
-                pos = current_positions
-            if pos >= MAX_CONCURRENT:
-                continue
+                if current_positions >= MAX_CONCURRENT:
+                    break
             try:
-                df = get_df(sym)
-                sig = check_signal(df)
-                if sig:
-                    entry, qty, side = execute_trade(sym, sig, df)
-                    threading.Thread(target=monitor_position, args=(sym, entry, qty, side), daemon=True).start()
-                    break  # 1포지션만 허용
+                df_30m = get_df(symbol, '30m')
+                df_1h  = get_df(symbol, '1h')
+                sig_30m = check_signal(df_30m)
+                sig_1h  = check_signal(df_1h)
+                price = float(client.futures_mark_price(symbol)['markPrice'])
+
+                if sig_30m and sig_1h and sig_30m == sig_1h:
+                    execute_trade(symbol, sig_30m, price, confidence='high')
+                elif sig_30m and not sig_1h:
+                    execute_trade(symbol, sig_30m, price, confidence='low')
+                elif sig_1h and not sig_30m:
+                    execute_trade(symbol, sig_1h, price, confidence='low')
+
             except Exception as e:
-                send_telegram(f"Error {sym}: {e}")
-                log(f"Error {sym}: {e}")
-        total_wait += SLEEP_INTERVAL
-        print(f"[{datetime.now():%H:%M:%S}] 사이클 완료, 10초 대기... (누적 대기: {total_wait}s)")
+                log(f"Error: {symbol}: {e}")
+                send_telegram(f"⚠️ {symbol} 오류: {e}")
         time.sleep(SLEEP_INTERVAL)
+
+if __name__ == '__main__':
+    main()
