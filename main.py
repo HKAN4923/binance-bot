@@ -127,7 +127,7 @@ def main():
                 df_1h  = get_df(symbol, '1h')
                 sig_30m = check_signal(df_30m)
                 sig_1h  = check_signal(df_1h)
-                price = float(client.futures_mark_price(symbol)['markPrice'])
+                price = float(client.futures_mark_price(symbol=symbol)['markPrice'])
 
                 if sig_30m and sig_1h and sig_30m == sig_1h:
                     execute_trade(symbol, sig_30m, price, confidence='high')
