@@ -12,24 +12,24 @@ from ta.trend import EMAIndicator, MACD, ADXIndicator
 import requests
 import logging
 
-# 로그 파일 설정
+# 로그 설정
 logging.basicConfig(filename='trade_log.txt', level=logging.INFO, format='%(asctime)s - %(message)s')
 
 def log(msg):
     print(msg)
     logging.info(msg)
 
-# 1. 환경 변수 로드
+# 환경 변수 로드
 load_dotenv()
 API_KEY          = os.getenv("BINANCE_API_KEY")
 API_SECRET       = os.getenv("BINANCE_API_SECRET")
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# 2. 바이낸스 클라이언트 설정
+# 바이낸스 클라이언트
 client = Client(API_KEY, API_SECRET)
 
-# 3. 심볼 리스트 (30개)
+# 심볼 리스트 (30개)
 symbols = [
     "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","ADAUSDT","XRPUSDT",
     "DOGEUSDT","DOTUSDT","MATICUSDT","LTCUSDT","LINKUSDT","UNIUSDT",
@@ -41,13 +41,12 @@ symbols = [
 # 설정 값
 LEVERAGE         = 10
 FORCE_HOURS      = 4
-SLEEP_INTERVAL   = 10    # 10초 대기
-MAX_CONCURRENT   = 1     # 동시 포지션 1개
+SLEEP_INTERVAL   = 10    # 대기시간 10초
+MAX_CONCURRENT   = 1     # 포지션 1개 제한
 
 current_positions = 0
 positions_lock    = threading.Lock()
 
-# 텔레그램 알림
 def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -55,7 +54,6 @@ def send_telegram(msg):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# 데이터 로딩 & 지표 계산
 def get_df(sym):
     data = client.futures_klines(symbol=sym, interval="5m", limit=100)
     df = pd.DataFrame(data, columns=["t","o","h","l","c","v","ct","qav","nt","tbb","tbq","i"])
@@ -71,7 +69,6 @@ def get_df(sym):
     df['swing_low']  = df['l'].rolling(20).min()
     return df
 
-# 진입 신호 판단
 def check_signal(df):
     last = df.iloc[-1]
     if last['adx'] < 20:
@@ -82,7 +79,6 @@ def check_signal(df):
         return 'SHORT'
     return None
 
-# 수량 계산
 def get_balance():
     for b in client.futures_account_balance():
         if b['asset']=='USDT':
@@ -94,7 +90,6 @@ def calc_qty(price, risk_pct=0.2):
     risk_amt = bal * risk_pct
     return round(risk_amt / price, 6)
 
-# 진입 및 TP/SL 설정 함수
 def execute_trade(sym, side, df):
     global current_positions
     client.futures_change_leverage(symbol=sym, leverage=LEVERAGE)
@@ -122,7 +117,6 @@ def execute_trade(sym, side, df):
         current_positions += 1
     return price, qty, side
 
-# 포지션 모니터링
 def monitor_position(sym, entry_price, qty, side):
     global current_positions
     start = datetime.now()
@@ -155,14 +149,13 @@ def monitor_position(sym, entry_price, qty, side):
 if __name__=='__main__':
     print("🔮 Bot is running…")
     send_telegram("🔮 Bot started (1 position max, 10s interval)")
+    total_wait = 0
     while True:
         print(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] === 새 사이클 시작 ===")
         for sym in symbols:
             with positions_lock:
                 pos = current_positions
-            print(f"[{datetime.now():%H:%M:%S}] 분석중... {sym} ⌛  |  Active: {pos}/{MAX_CONCURRENT}")
             if pos >= MAX_CONCURRENT:
-                print(f"  → 이미 포지션 {MAX_CONCURRENT}개, 건너뜁니다.")
                 continue
             try:
                 df = get_df(sym)
@@ -170,8 +163,10 @@ if __name__=='__main__':
                 if sig:
                     entry, qty, side = execute_trade(sym, sig, df)
                     threading.Thread(target=monitor_position, args=(sym, entry, qty, side), daemon=True).start()
+                    break  # 1포지션만 허용
             except Exception as e:
                 send_telegram(f"Error {sym}: {e}")
                 log(f"Error {sym}: {e}")
-        print(f"[{datetime.now():%H:%M:%S}] 사이클 완료, {SLEEP_INTERVAL}s 대기...")
+        total_wait += SLEEP_INTERVAL
+        print(f"[{datetime.now():%H:%M:%S}] 사이클 완료, 10초 대기... (누적 대기: {total_wait}s)")
         time.sleep(SLEEP_INTERVAL)
