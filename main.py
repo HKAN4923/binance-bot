@@ -12,20 +12,14 @@ from ta.trend import EMAIndicator, MACD, ADXIndicator
 import requests
 import logging
 
-# 설정값
-RR_RATIO = 1.3           # 리스크-리워드 비율 1:1.3
-LEVERAGE = 10
-SLEEP_INTERVAL = 10      # 10초 대기
-MAX_CONCURRENT = 1       # 동시 1포지션
+# ✅ 절대경로로 .env 로드
+load_dotenv(dotenv_path="/home/hgymire3123/binance-bot/.env")
 
-# 환경 변수 로드
-load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Binance client 생성
 client = Client(API_KEY, API_SECRET)
 
 # 로깅 설정
@@ -41,129 +35,106 @@ def send_telegram(msg):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# 심볼 리스트 (25개)
+# ✅ 심볼 리스트 (100개)
 symbols = [
-    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","ADAUSDT",
-    "XRPUSDT","DOGEUSDT","DOTUSDT","MATICUSDT","LTCUSDT",
-    "LINKUSDT","UNIUSDT","BCHUSDT","ETCUSDT","XLMUSDT",
-    "AAVEUSDT","MKRUSDT","COMPUSDT","SUSHIUSDT","AVAXUSDT",
-    "FILUSDT","ATOMUSDT","EOSUSDT","THETAUSDT","TRXUSDT"
+    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","ADAUSDT","XRPUSDT","DOGEUSDT","DOTUSDT","MATICUSDT","LTCUSDT",
+    "LINKUSDT","UNIUSDT","BCHUSDT","ETCUSDT","XLMUSDT","AAVEUSDT","MKRUSDT","COMPUSDT","SUSHIUSDT","AVAXUSDT",
+    "FILUSDT","ATOMUSDT","EOSUSDT","THETAUSDT","TRXUSDT","NEARUSDT","ARBUSDT","OPUSDT","IMXUSDT","GMXUSDT",
+    "DYDXUSDT","APEUSDT","SANDUSDT","MANAUSDT","RNDRUSDT","FTMUSDT","GALAUSDT","RLCUSDT","CRVUSDT","ENSUSDT",
+    "CFXUSDT","KLAYUSDT","ZILUSDT","1INCHUSDT","ALGOUSDT","ANKRUSDT","CHZUSDT","TOMOUSDT","OCEANUSDT","FLUXUSDT",
+    "COTIUSDT","BELUSDT","BATUSDT","DENTUSDT","RUNEUSDT","LINAUSDT","ICXUSDT","STMXUSDT","QTUMUSDT","ZRXUSDT",
+    "BLZUSDT","STORJUSDT","KAVAUSDT","INJUSDT","TLMUSDT","VETUSDT","WAVESUSDT","IOSTUSDT","MTLUSDT","TRBUSDT",
+    "FETUSDT","HOOKUSDT","IDUSDT","PHBUSDT","JOEUSDT","BICOUSDT","ASTRUSDT","LDOUSDT","PEOPLEUSDT","XEMUSDT",
+    "ALPHAUSDT","NKNUSDT","SLPUSDT","SYSUSDT","HIGHUSDT","DGBUSDT","BANDUSDT","NMRUSDT","GLMRUSDT","MOVRUSDT",
+    "CKBUSDT","API3USDT","HIFIUSDT","RIFUSDT","ERNUSDT","XNOUSDT","MDTUSDT","SPELLUSDT","TUSDT","PYRUSDT"
 ]
 
-current_positions = 0
-positions_lock = threading.Lock()
-
-# 데이터 프레임 로드 및 지표 계산
-def get_df(symbol, interval):
-    klines = client.futures_klines(symbol=symbol, interval=interval, limit=100)
-    df = pd.DataFrame(klines, columns=["t","o","h","l","c","v","ct","qav","nt","tbb","tbq","i"])
-    for col in ["o","h","l","c"]:
-        df[col] = df[col].astype(float)
-    df['rsi']   = RSIIndicator(df['c'], window=14).rsi()
-    df['macd']  = MACD(df['c']).macd_diff()
-    df['ema9']  = EMAIndicator(df['c'], window=9).ema_indicator()
-    df['adx']   = ADXIndicator(df['h'], df['l'], df['c'], window=14).adx()
-    df['stoch'] = StochasticOscillator(df['h'], df['l'], df['c'], window=14).stoch()
-    return df
-
-# 진입 신호 판단 (기준 완화)
-def check_signal(df):
-    last = df.iloc[-1]
-    if last['adx'] < 10:
+def get_klines(symbol, interval, limit):
+    try:
+        klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
+        df = pd.DataFrame(klines, columns=['time','open','high','low','close','volume','close_time','quote_asset_volume','num_trades','taker_buy_base','taker_buy_quote','ignore'])
+        df['close'] = df['close'].astype(float)
+        return df
+    except Exception as e:
+        log(f"Error fetching {symbol} - {e}")
         return None
-    if last['rsi'] < 42 and last['macd'] > 0 and last['c'] > last['ema9'] and last['stoch'] < 50:
-        return 'LONG'
-    if last['rsi'] > 58 and last['macd'] < 0 and last['c'] < last['ema9'] and last['stoch'] > 50:
-        return 'SHORT'
-    return None
 
-# 잔고 조회
+def analyze_symbol(symbol):
+    df = get_klines(symbol, '15m', 100)
+    if df is None:
+        return None, 0.0
+    close = df['close']
+
+    ema = EMAIndicator(close, window=20).ema_indicator()
+    rsi = RSIIndicator(close, window=14).rsi()
+    stoch = StochasticOscillator(df['high'].astype(float), df['low'].astype(float), close, window=14).stoch()
+    macd = MACD(close).macd_diff()
+    adx = ADXIndicator(df['high'].astype(float), df['low'].astype(float), close, window=14).adx()
+
+    signal = None
+    confidence = 0
+
+    if close.iloc[-1] > ema.iloc[-1] and rsi.iloc[-1] > 50 and macd.iloc[-1] > 0 and adx.iloc[-1] > 25:
+        signal = 'long'
+        confidence = (rsi.iloc[-1] - 50) / 50
+    elif close.iloc[-1] < ema.iloc[-1] and rsi.iloc[-1] < 50 and macd.iloc[-1] < 0 and adx.iloc[-1] > 25:
+        signal = 'short'
+        confidence = (50 - rsi.iloc[-1]) / 50
+
+    return signal, round(confidence, 2)
+
 def get_balance():
     for b in client.futures_account_balance():
         if b['asset'] == 'USDT':
             return float(b['balance'])
-    return 0.0
+    return 0
 
-# 주문 수량 계산 (high:30%, low:10%)
 def calc_qty(price, confidence):
     bal = get_balance()
-    # 임시 진입 장벽: high -> 30%, low -> 10%
-    alloc = bal * (0.3 if confidence == 'high' else 0.1)
-    return round(alloc / price, 6)
+    risk = bal * 0.3  # 30% 고정 리스크
+    return round((risk / price) * confidence, 3)
 
-# 반대 방향 시그널 확인 후 탈출 판단
-def opposite_signal(df, current_side):
-    signal = check_signal(df)
-    return (current_side == 'LONG' and signal == 'SHORT') or (current_side == 'SHORT' and signal == 'LONG')
+def execute_trade(symbol, signal, price, position):
+    qty = calc_qty(price, confidence=1.0)  # 자동 진입 기준 confidence 1.0으로 가정
+    if qty <= 0:
+        return
 
-# 시장가 진입 및 TP/SL 설정
-def execute_trade(symbol, side, price, confidence):
-    global current_positions
-    qty = calc_qty(price, confidence)
-    client.futures_change_leverage(symbol=symbol, leverage=LEVERAGE)
-    order_side = SIDE_BUY if side == 'LONG' else SIDE_SELL
-    client.futures_create_order(symbol=symbol, side=order_side, type=ORDER_TYPE_MARKET, quantity=qty)
+    side = SIDE_BUY if signal == 'long' else SIDE_SELL
+    client.futures_create_order(symbol=symbol, side=side, type=ORDER_TYPE_MARKET, quantity=qty)
 
-    sl_price = price * (0.98 if side == 'LONG' else 1.02)
-    rr_dist = abs(price - sl_price) * RR_RATIO
-    tp_price = price + rr_dist if side == 'LONG' else price - rr_dist
+    entry = price
+    stop = entry * (0.97 if signal == 'long' else 1.03)
+    target = entry * (1.06 if signal == 'long' else 0.94)
 
-    client.futures_create_order(symbol=symbol,
-                                side=SIDE_SELL if side=='LONG' else SIDE_BUY,
-                                type="TAKE_PROFIT_MARKET",
-                                stopPrice=round(tp_price,2), closePosition=True)
-    client.futures_create_order(symbol=symbol,
-                                side=SIDE_SELL if side=='LONG' else SIDE_BUY,
-                                type="STOP_MARKET",
-                                stopPrice=round(sl_price,2), closePosition=True)
+    sl_side = SIDE_SELL if signal == 'long' else SIDE_BUY
+    tp_side = SIDE_SELL if signal == 'long' else SIDE_BUY
 
-    msg = f"{symbol} {side} 진입 @{price:.2f} | TP:{tp_price:.2f}, SL:{sl_price:.2f} ({confidence})"
-    send_telegram(msg)
+    client.futures_create_order(symbol=symbol, side=tp_side, type='TAKE_PROFIT_MARKET', stopPrice=target, quantity=qty, timeInForce='GTC')
+    client.futures_create_order(symbol=symbol, side=sl_side, type='STOP_MARKET', stopPrice=stop, quantity=qty, timeInForce='GTC')
+
+    msg = f"[{symbol}] {signal.upper()} 진입\n수량: {qty}\n진입가: {entry}\n익절가: {target}\n손절가: {stop}"
     log(msg)
-    with positions_lock:
-        current_positions += 1
+    send_telegram(msg)
 
-    # 포지션 진입 후 1초 단위 반대 신호 체크
+def trade_worker(symbol):
+    signal, confidence = analyze_symbol(symbol)
+    if signal and confidence > 0.4:
+        price = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+        execute_trade(symbol, signal, price, 'low')
+
+def main():
     while True:
-        df_check = get_df(symbol, '30m')
-        if opposite_signal(df_check, side):
-            client.futures_create_order(symbol=symbol,
-                                        side=SIDE_SELL if side=='LONG' else SIDE_BUY,
-                                        type=ORDER_TYPE_MARKET,
-                                        quantity=qty)
-            msg = f"{symbol} 반대 시그널 발생으로 즉시 청산"
-            send_telegram(msg)
-            log(msg)
-            with positions_lock:
-                current_positions -= 1
-            break
-        time.sleep(1)
-
-# 메인 실행
-if __name__ == '__main__':
-    print("🔮 Bot started (임시 진입 30/10%, 25개 심볼)")
-    send_telegram("🤖 Bot started (30m/1h 신호 기반, 임시 진입 30/10%)")
-
-    while True:
-        print(f"[{datetime.now():%H:%M:%S}] 새 사이클 시작...")
+        threads = []
         for symbol in symbols:
-            with positions_lock:
-                if current_positions >= MAX_CONCURRENT:
-                    break
-            df_30m = get_df(symbol, '30m')
-            df_1h  = get_df(symbol, '1h')
-            sig30  = check_signal(df_30m)
-            sig1h  = check_signal(df_1h)
-            price  = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+            t = threading.Thread(target=trade_worker, args=(symbol,))
+            threads.append(t)
+            t.start()
+            time.sleep(1)
 
-            if sig30 and sig30 == sig1h:
-                execute_trade(symbol, sig30, price, 'high')
-                break
-            elif sig30 and not sig1h:
-                execute_trade(symbol, sig30, price, 'low')
-                break
-            elif sig1h and not sig30:
-                execute_trade(symbol, sig1h, price, 'low')
-                break
+        for t in threads:
+            t.join()
 
-        time.sleep(SLEEP_INTERVAL)
+        time.sleep(300)  # 5분 대기 후 반복
+
+if __name__ == "__main__":
+    main()
