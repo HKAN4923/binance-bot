@@ -12,6 +12,8 @@ from ta.momentum import RSIIndicator, StochasticOscillator, StochRSIIndicator, W
 from ta.trend import EMAIndicator, MACD, ADXIndicator, CCIIndicator
 from ta.volatility import AverageTrueRange
 
+
+
 # Load .env
 load_dotenv()
 API_KEY          = os.getenv("BINANCE_API_KEY")
@@ -153,6 +155,9 @@ def enter(symbol, side):
     tp = max(price + atr * RR_RATIO, price + min_diff) if side == 'LONG' else min(price - atr * RR_RATIO, price - min_diff)
     sl = round(sl, price_prec)
     tp = round(tp, price_prec)
+
+    ORDER_TYPE_STOP_MARKET = "STOP_MARKET"
+    ORDER_TYPE_TAKE_PROFIT_MARKET = "TAKE_PROFIT_MARKET"
 
     client.futures_change_leverage(symbol=symbol, leverage=LEVERAGE)
     client.futures_create_order(symbol=symbol, side=SIDE_BUY if side=='LONG' else SIDE_SELL,
