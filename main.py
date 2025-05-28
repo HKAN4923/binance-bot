@@ -1,235 +1,198 @@
-# -*- coding: utf-8 -*-
-import os
+# my_binance_bot.py
+
 import time
 import math
+import pytz
+import ccxt
 import requests
-import pandas as pd
-from datetime import datetime, timedelta, timezone
-from binance.client import Client
-from binance.enums import *
-from dotenv import load_dotenv
-from ta.momentum import RSIIndicator, StochasticOscillator, StochRSIIndicator, WilliamsRIndicator
-from ta.trend import EMAIndicator, MACD, ADXIndicator, CCIIndicator
-from ta.volatility import AverageTrueRange
+import threading
+import numpy as np
+import talib
+from datetime import datetime, timedelta
 
+# ========= 사용자 설정 =========
+API_KEY = 'YOUR_BINANCE_API_KEY'
+API_SECRET = 'YOUR_BINANCE_SECRET'
+TELEGRAM_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
+TELEGRAM_CHAT_ID = 'YOUR_TELEGRAM_CHAT_ID'
+# ===============================
 
+binance = ccxt.binance({
+    'apiKey': API_KEY,
+    'secret': API_SECRET,
+    'enableRateLimit': True,
+    'options': {'defaultType': 'future'}
+})
+binance.set_sandbox_mode(False)
 
-# Load .env
-load_dotenv()
-API_KEY          = os.getenv("BINANCE_API_KEY")
-API_SECRET       = os.getenv("BINANCE_API_SECRET")
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+open_positions = {}
+trade_history = []  # 각 거래: {'symbol','profit','time'}
 
-# Binance API client
-client = Client(API_KEY, API_SECRET)
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    requests.post(url, json=payload)
 
-# Settings
-LEVERAGE = 10
-RISK_RATIO = 0.3
-MAX_POSITIONS = 3
-ANALYSIS_INTERVAL = 10
-MONITOR_INTERVAL = 1
-TELEGRAM_SUMMARY_INTERVAL = 1800
-MONITOR_TERMINAL_INTERVAL = 30
-MIN_ADX = 20
-ATR_PERIOD = 14
-OSC_PERIOD = 14
-EMA_SHORT = 9
-EMA_LONG = 21
-RSI_PERIOD = 14
-RR_RATIO = 1.3
-TIMEOUT1 = timedelta(hours=2, minutes=30)
-TIMEOUT2 = timedelta(hours=3)
-EARLY_EXIT_PCT = 0.01
+def get_ohlcv(symbol, timeframe='1h', limit=100):
+    return binance.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
-positions = {}
-trade_log = []
-last_summary = datetime.now(timezone.utc) - timedelta(seconds=TELEGRAM_SUMMARY_INTERVAL)
-next_report_times = [
-    datetime.now(timezone.utc).replace(hour=6, minute=30, second=0, microsecond=0),
-    datetime.now(timezone.utc).replace(hour=21, minute=30, second=0, microsecond=0)
-]
+def calculate_indicators(data):
+    closes = np.array([x[4] for x in data])
+    highs  = np.array([x[2] for x in data])
+    lows   = np.array([x[3] for x in data])
+    return {
+        'rsi': talib.RSI(closes, timeperiod=14)[-1],
+        'macd': talib.MACD(closes, fastperiod=12, slowperiod=26, signalperiod=9)[0][-1],
+        'macd_signal': talib.MACD(closes, fastperiod=12, slowperiod=26, signalperiod=9)[1][-1],
+        'stoch_k': talib.STOCH(highs, lows, closes)[0][-1],
+        'adx': talib.ADX(highs, lows, closes)[-1]
+    }
 
-def send_telegram(msg):
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"},
-            timeout=5
-        )
-    except Exception as e:
-        print(f"[TELEGRAM ERROR] {e}")
+def get_signal(symbol):
+    data_1h = get_ohlcv(symbol, '1h')
+    data_4h = get_ohlcv(symbol, '4h')
 
-def get_precision(symbol):
-    info = client.futures_exchange_info()
-    for s in info['symbols']:
-        if s['symbol'] == symbol:
-            for f in s['filters']:
-                if f['filterType'] == 'LOT_SIZE':
-                    qty_step = float(f['stepSize'])
-                    qty_precision = abs(int(round(math.log10(qty_step))))
-                if f['filterType'] == 'PRICE_FILTER':
-                    price_tick = float(f['tickSize'])
-                    price_precision = abs(int(round(math.log10(price_tick))))
-            return qty_precision, price_precision
-    return 3, 2
+    ind1 = calculate_indicators(data_1h)
+    closes4 = np.array([x[4] for x in data_4h])
+    ema20 = talib.EMA(closes4, timeperiod=20)[-1]
+    ema50 = talib.EMA(closes4, timeperiod=50)[-1]
+    ema200 = talib.EMA(closes4, timeperiod=200)[-1]
 
-def get_usdt_balance():
-    for asset in client.futures_account_balance():
-        if asset['asset'] == 'USDT':
-            return float(asset['availableBalance'])
-    return 0.0
+    direction = None
+    if ind1['rsi'] > 60 and ind1['macd'] > ind1['macd_signal']:
+        direction = 'long'
+    elif ind1['rsi'] < 40 and ind1['macd'] < ind1['macd_signal']:
+        direction = 'short'
 
-def get_all_usdt_symbols():
-    info = client.futures_exchange_info()
-    return [s['symbol'] for s in info['symbols'] if s['contractType']=='PERPETUAL' and s['quoteAsset']=='USDT']
+    # 4시간봉 필터: 완전 반대 정렬이면 진입 금지
+    if direction == 'long' and ema20 < ema50 < ema200:
+        return None
+    if direction == 'short' and ema20 > ema50 > ema200:
+        return None
 
-TRADE_SYMBOLS = get_all_usdt_symbols()
+    return direction
 
-def fetch_klines(symbol, interval, limit=100):
-    data = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
-    df = pd.DataFrame(data, columns=["t","o","h","l","c","v","ct","qav","nt","tbb","tbq","i"])
-    df[['o','h','l','c']] = df[['o','h','l','c']].astype(float)
-    df['t'] = pd.to_datetime(df['t'], unit='ms')
-    df.set_index('t', inplace=True)
-    return df
+def calculate_tp_sl(price, adx, direction):
+    # 보수적 유동 배수
+    if adx >= 25:
+        tp_mul, sl_mul = 3.0, 1.5
+    elif adx >= 20:
+        tp_mul, sl_mul = 2.5, 1.2
+    else:
+        tp_mul, sl_mul = 2.0, 1.0
+    atr = price * 0.005  # 단순 ATR 대체
+    if direction == 'long':
+        tp = price + atr * tp_mul
+        sl = price - atr * sl_mul
+    else:
+        tp = price - atr * tp_mul
+        sl = price + atr * sl_mul
+    return round(tp, 2), round(sl, 2)
 
-def calc_indicators(df):
-    if df is None or len(df) < max(ATR_PERIOD, OSC_PERIOD, EMA_LONG, RSI_PERIOD):
-        return pd.DataFrame()
-    df['rsi'] = RSIIndicator(df['c'], RSI_PERIOD).rsi()
-    df['macd_diff'] = MACD(df['c']).macd_diff()
-    df['ema'] = EMAIndicator(df['c'], EMA_LONG).ema_indicator()
-    df['adx'] = ADXIndicator(df['h'], df['l'], df['c'], window=RSI_PERIOD).adx()
-    df['stoch'] = StochasticOscillator(df['h'], df['l'], df['c'], window=OSC_PERIOD).stoch()
-    df['atr'] = AverageTrueRange(df['h'], df['l'], df['c'], window=ATR_PERIOD).average_true_range()
-    df['cci'] = CCIIndicator(df['h'], df['l'], df['c'], window=OSC_PERIOD).cci()
-    df['ema9'] = EMAIndicator(df['c'], EMA_SHORT).ema_indicator()
-    df['ema21'] = EMAIndicator(df['c'], EMA_LONG).ema_indicator()
-    df['stochrsi'] = StochRSIIndicator(df['c'], window=RSI_PERIOD).stochrsi()
-    df['wpr'] = WilliamsRIndicator(df['h'], df['l'], df['c'], lbp=14).williams_r()
-    return df.dropna()
+def get_price(symbol):
+    return float(binance.fetch_ticker(symbol)['last'])
 
-def check_entry(symbol):
-    df = fetch_klines(symbol, '1h')
-    if df.empty: return None
-    df = calc_indicators(df)
-    if df.empty or df['adx'].iloc[-1] < MIN_ADX: return None
-    last = df.iloc[-1]
-    ls = sum([last['rsi']<40, last['macd_diff']>0, last['c']>last['ema'], last['stoch']<20])
-    ss = sum([last['rsi']>60, last['macd_diff']<0, last['c']<last['ema'], last['stoch']>80])
-    cl = sum([last['macd_diff']>0, last['c']>last['ema'], last['adx']>MIN_ADX])
-    cs = sum([last['macd_diff']<0, last['c']<last['ema'], last['adx']>MIN_ADX])
-    if cl>=2 and ls>=3: return 'LONG'
-    if cs>=2 and ss>=3: return 'SHORT'
-    return None
+def open_position(symbol, direction):
+    price = get_price(symbol)
+    amount = 10 / price
+    ind1h = calculate_indicators(get_ohlcv(symbol, '1h'))
+    tp, sl = calculate_tp_sl(price, ind1h['adx'], direction)
+    # 진입
+    binance.create_market_order(symbol, 'buy' if direction=='long' else 'sell', amount)
+    send_telegram(f"🚀 진입: {symbol} / {direction.upper()}\n진입가: {price}\nTP: {tp} / SL: {sl}")
+    open_positions[symbol] = {
+        'entry': price,
+        'amount': amount,
+        'side': direction,
+        'entry_time': time.time(),
+        'rechecked': False
+    }
 
-def is_early_exit(df, pos):
-    last = df.iloc[-1]
-    pnl_pct = ((last['c']-pos['entry_price'])/pos['entry_price']*100) if pos['side']=='LONG' else ((pos['entry_price']-last['c'])/pos['entry_price']*100)
-    if pnl_pct < EARLY_EXIT_PCT*100: return False
-    if pos['side']=='LONG' and (last['cci']<100 or last['ema9']<last['ema21'] or last['wpr']>-20): return True
-    if pos['side']=='SHORT' and (last['cci']>-100 or last['ema9']>last['ema21'] or last['wpr']<-80): return True
-    return False
+def close_position(symbol, reason):
+    order = open_positions.pop(symbol, None)
+    if not order: return
+    close_side = 'sell' if order['side']=='long' else 'buy'
+    binance.create_market_order(symbol, close_side, order['amount'])
+    profit = (get_price(symbol) - order['entry']) * order['amount'] * (1 if order['side']=='long' else -1)
+    trade_history.append({'symbol': symbol, 'profit': profit, 'time': time.time()})
+    send_telegram(f"{reason} - {symbol} / 수익: {round(profit,2)} USDT")
 
-def cancel_tp_sl(symbol):
-    try:
-        orders = client.futures_get_open_orders(symbol=symbol)
-        for o in orders:
-            client.futures_cancel_order(symbol=symbol, orderId=o['orderId'])
-    except Exception as e:
-        print(f"[CANCEL ERROR] {e}")
-
-def enter(symbol, side):
-    bal = get_usdt_balance()
-    price = float(client.futures_mark_price(symbol=symbol)['markPrice'])
-    df = calc_indicators(fetch_klines(symbol, '1h'))
-    atr = df['atr'].iloc[-1]
-    qty_prec, price_prec = get_precision(symbol)
-    margin = bal * RISK_RATIO * 0.95
-    qty = round(margin * LEVERAGE / price, qty_prec)
-    tick = float(next(f['tickSize'] for s in client.futures_exchange_info()['symbols'] if s['symbol']==symbol for f in s['filters'] if f['filterType']=='PRICE_FILTER'))
-    min_diff = tick * 5
-    sl = min(price - atr, price - min_diff) if side == 'LONG' else max(price + atr, price + min_diff)
-    tp = max(price + atr * RR_RATIO, price + min_diff) if side == 'LONG' else min(price - atr * RR_RATIO, price - min_diff)
-    sl = round(sl, price_prec)
-    tp = round(tp, price_prec)
-
-    ORDER_TYPE_STOP_MARKET = "STOP_MARKET"
-    ORDER_TYPE_TAKE_PROFIT_MARKET = "TAKE_PROFIT_MARKET"
-
-    client.futures_change_leverage(symbol=symbol, leverage=LEVERAGE)
-    client.futures_create_order(symbol=symbol, side=SIDE_BUY if side=='LONG' else SIDE_SELL,
-                                type=ORDER_TYPE_MARKET, quantity=qty)
-    client.futures_create_order(symbol=symbol, side=SIDE_SELL if side=='LONG' else SIDE_BUY,
-                                type=ORDER_TYPE_STOP_MARKET, stopPrice=sl, closePosition=True)
-    client.futures_create_order(symbol=symbol, side=SIDE_SELL if side=='LONG' else SIDE_BUY,
-                                type=ORDER_TYPE_TAKE_PROFIT_MARKET, stopPrice=tp, closePosition=True)
-    now = datetime.now(timezone.utc)
-    positions[symbol] = {'side': side, 'entry_time': now, 'qty': qty, 'entry_price': price, 'last_monitor': now}
-    trade_log.append({'symbol': symbol, 'side': side, 'entry': price, 'time': now})
-    send_telegram(f"*ENTRY*\n{symbol} | {side}\nEntry: {price:.2f}\nTP: {tp:.2f} | SL: {sl:.2f}\nBalance: {bal:.2f} USDT")
-
-def manage():
-    now = datetime.now(timezone.utc)
-    global last_summary
-    for sym, pos in list(positions.items()):
-        df1 = calc_indicators(fetch_klines(sym, '1h'))
-        if df1.empty: continue
-        curr = float(client.futures_symbol_ticker(symbol=sym)['price'])
-        pnl = (curr - pos['entry_price']) * pos['qty'] if pos['side'] == 'LONG' else (pos['entry_price'] - curr) * pos['qty']
-        pnl_pct = pnl / (pos['entry_price'] * pos['qty']) * 100
-        if (now - pos['last_monitor']).total_seconds() >= MONITOR_TERMINAL_INTERVAL:
-            print(f"[MONITOR] {sym} PnL:{pnl:+.2f} ({pnl_pct:+.2f}%) age:{now - pos['entry_time']}")
-            pos['last_monitor'] = now
-        if is_early_exit(df1, pos):
-            cancel_tp_sl(sym)
-            client.futures_create_order(symbol=sym, side=SIDE_SELL if pos['side']=='LONG' else SIDE_BUY,
-                                        type=ORDER_TYPE_MARKET, quantity=pos['qty'])
-            send_telegram(f"*EARLY EXIT* {sym} | PnL:{pnl:+.2f} USDT ({pnl_pct:+.2f}%)")
-            print(f"[EARLY EXIT] {sym}")
-            positions.pop(sym)
-
-    # Summary every TELEGRAM_SUMMARY_INTERVAL
-    if (now - last_summary).total_seconds() > TELEGRAM_SUMMARY_INTERVAL:
-        if positions:
-            msg = "*[POSITIONS UPDATE]*\n"
-            for sym, pos in positions.items():
-                curr = float(client.futures_symbol_ticker(symbol=sym)['price'])
-                pnl = (curr - pos['entry_price']) * pos['qty'] if pos['side'] == 'LONG' else (pos['entry_price'] - curr) * pos['qty']
-                pnl_pct = pnl / (pos['entry_price'] * pos['qty']) * 100
-                msg += f"{sym} | {pos['side']} | PnL: {pnl:+.2f} USDT ({pnl_pct:+.2f}%)\n"
-            send_telegram(msg)
-        last_summary = now
-
-    # Daily report
-    for i, rep_time in enumerate(next_report_times):
-        if now >= rep_time:
-            wins = sum(1 for t in trade_log if 'pnl' in t and t['pnl'] > 0)
-            total = sum(1 for t in trade_log if 'pnl' in t)
-            winrate = (wins / total * 100) if total else 0
-            msg = f"📘 *Daily Report*\nTotal Trades: {total}\nWins: {wins}\nWin Rate: {winrate:.2f}%"
-            send_telegram(msg)
-            next_report_times[i] += timedelta(days=1)
-
-def main_loop():
-    print("[BOT STARTED] Monitoring...")
-    send_telegram("🤖 Bot started.")
+def monitor_positions():
     while True:
-        try:
-            if len(positions) < MAX_POSITIONS:
-                for sym in TRADE_SYMBOLS:
-                    if sym in positions: continue
-                    side = check_entry(sym)
-                    if side:
-                        enter(sym, side)
-                        break
-            manage()
-            time.sleep(ANALYSIS_INTERVAL)
-        except Exception as e:
-            print(f"[ERROR] {e}")
-            time.sleep(5)
+        now = time.time()
+        for sym, data in list(open_positions.items()):
+            elapsed = now - data['entry_time']
+            # 1.5시간 재검토
+            if elapsed >= 5400 and not data['rechecked']:
+                data['rechecked'] = True
+                sig = get_signal(sym)
+                if sig and sig != data['side']:
+                    close_position(sym, "🧐 재판단 EXIT")
+            # 2시간 무조건 청산
+            elif elapsed >= 7200:
+                close_position(sym, "⏱ TIMEOUT EXIT")
+        time.sleep(1)
 
-if __name__ == '__main__':
-    main_loop()
+def trade_loop():
+    while True:
+        markets = binance.load_markets()
+        for sym in markets:
+            if '/USDT' in sym and sym not in open_positions:
+                sig = get_signal(sym)
+                if sig:
+                    open_position(sym, sig)
+                    time.sleep(1)
+        time.sleep(10)
+
+def daily_report():
+    seoul = pytz.timezone('Asia/Seoul')
+    while True:
+        now = datetime.now(seoul)
+        hhmm = now.strftime('%H:%M')
+        # 아침 점호 06:30
+        if hhmm == '06:30':
+            # 기간: 전날 21:30 ~ 당일 06:30
+            end_ts = now.timestamp()
+            start = now - timedelta(hours=9)  # UTC: 21:30 전날
+            start = start.replace(hour=21, minute=30, second=0, microsecond=0)
+            start_ts = start.timestamp()
+            _send_period(start_ts, end_ts, now, "아침 점호")
+            time.sleep(60)
+        # 저녁 점호 21:30
+        elif hhmm == '21:30':
+            # 기간: 당일 06:30 ~ 21:30
+            start = now.replace(hour=6, minute=30, second=0, microsecond=0)
+            start_ts = start.timestamp()
+            end_ts = now.timestamp()
+            _send_period(start_ts, end_ts, now, "저녁 점호")
+            time.sleep(60)
+        time.sleep(10)
+
+def _send_period(start_ts, end_ts, now, title):
+    trades = [t for t in trade_history if start_ts <= t['time'] <= end_ts]
+    total = len(trades)
+    wins = sum(1 for t in trades if t['profit']>0)
+    losses = total - wins
+    profit = sum(t['profit'] for t in trades)
+    winrate = round(wins/total*100,2) if total else 0.0
+    # 전체 승률 (5월29일 00:00 이후)
+    kst = pytz.timezone('Asia/Seoul')
+    base = datetime(now.year, now.month, now.day, tzinfo=kst)
+    if now.hour < 0:  # 날짜 바뀔 때 처리
+        base -= timedelta(days=1)
+    base_ts = base.timestamp()
+    overall = [t for t in trade_history if t['time'] >= base_ts]
+    ow_total = len(overall)
+    ow_wins = sum(1 for t in overall if t['profit']>0)
+    overall_rate = round(ow_wins/ow_total*100,2) if ow_total else 0.0
+
+    msg = f"📊<{title}> {now.strftime('%m월 %d일 %H:%M')}\n"
+    msg += f"거래: {total}회  손익: {round(profit,2)} USDT\n"
+    msg += f"{wins}승 {losses}패  승률: {winrate}%\n"
+    msg += f"전체(오늘) 승률: {overall_rate}%"
+    send_telegram(msg)
+
+# === 실행 ===
+threading.Thread(target=monitor_positions, daemon=True).start()
+threading.Thread(target=daily_report, daemon=True).start()
+trade_loop()
