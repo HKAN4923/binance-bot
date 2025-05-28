@@ -43,12 +43,19 @@ positions = {}  # symbol -> {side, entry_time, qty}
 last_summary = datetime.now(timezone.utc) - timedelta(seconds=TELEGRAM_SUMMARY_INTERVAL)
 
 # Top 100 USDT perpetual symbols (hardcoded)
-TRADE_SYMBOLS = [
-    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT', 'DOGEUSDT',
-    'AVAXUSDT', 'MATICUSDT', 'DOTUSDT', 'LINKUSDT', 'UNIUSDT', 'LTCUSDT',
-    'BCHUSDT', 'ETCUSDT', 'NEARUSDT', 'ATOMUSDT', 'FILUSDT', 'INJUSDT', 'RNDRUSDT',
-    'ARUSDT', 'SUIUSDT', 'PEPEUSDT', '1000SHIBUSDT', 'MEMEUSDT', 'OPUSDT',
-    'SEIUSDT', 'TIAUSDT', 'STXUSDT', 'LDOUSDT', 'APTUSDT', 'IMXUSDT', 'GMXUSDT']
+# Replace the hardcoded TRADE_SYMBOLS line with this:
+def get_valid_futures_symbols():
+    info = client.futures_exchange_info()
+    return sorted([s['symbol'] for s in info['symbols'] if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT'])
+
+# Replace the hardcoded TRADE_SYMBOLS line with this:
+def get_valid_futures_symbols():
+    info = client.futures_exchange_info()
+    return sorted([s['symbol'] for s in info['symbols'] if s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT'])
+
+TRADE_SYMBOLS = get_valid_futures_symbols()
+
+
 
 # Utility functions
 def send_telegram(msg):
