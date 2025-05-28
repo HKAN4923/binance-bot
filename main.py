@@ -64,7 +64,7 @@ def get_lot_size(symbol):
 
 
 def round_price(price, tick_size):
-    return float(format(round(price / tick_size) * tick_size, f".{abs(int(math.log10(tick_size))))}f"))
+    return float(format(round(price / tick_size) * tick_size, f".{abs(int(math.log10(tick_size)))}f"))
 
 
 def round_qty(qty, step_size):
