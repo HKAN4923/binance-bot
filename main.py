@@ -188,7 +188,7 @@ def manage():
                     del positions[sym]
 
 # Summary
- def summary():
+def summary():
     global last_summary
     now = datetime.now(timezone.utc)
     if (now-last_summary).total_seconds() >= TELEGRAM_SUMMARY_INTERVAL:
