@@ -43,6 +43,20 @@ EARLY_EXIT_PCT            = 0.01
 positions    = {}
 last_summary = datetime.now(timezone.utc) - timedelta(seconds=TELEGRAM_SUMMARY_INTERVAL)
 
+def get_precision(symbol):
+    info = client.futures_exchange_info()
+    for s in info['symbols']:
+        if s['symbol'] == symbol:
+            for f in s['filters']:
+                if f['filterType'] == 'LOT_SIZE':
+                    qty_step = float(f['stepSize'])
+                    qty_precision = abs(int(round(math.log10(qty_step))))
+                if f['filterType'] == 'PRICE_FILTER':
+                    price_tick = float(f['tickSize'])
+                    price_precision = abs(int(round(math.log10(price_tick))))
+            return qty_precision, price_precision
+    return 3, 2  # fallback
+
 def send_telegram(msg):
     try:
         requests.post(
@@ -53,17 +67,21 @@ def send_telegram(msg):
     except Exception as e:
         print(f"[TELEGRAM ERROR] {e}")
 
+
 def get_usdt_balance():
     for asset in client.futures_account_balance():
         if asset['asset'] == 'USDT':
             return float(asset['withdrawAvailable'])
     return 0.0
 
+
 def get_all_usdt_symbols():
     info = client.futures_exchange_info()
     return [s['symbol'] for s in info['symbols'] if s['contractType']=='PERPETUAL' and s['quoteAsset']=='USDT']
 
+
 TRADE_SYMBOLS = get_all_usdt_symbols()
+
 
 def fetch_klines(symbol, interval, limit=100):
     data = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
@@ -72,6 +90,7 @@ def fetch_klines(symbol, interval, limit=100):
     df['t'] = pd.to_datetime(df['t'], unit='ms')
     df.set_index('t', inplace=True)
     return df
+
 
 def calc_indicators(df):
     req = max(ATR_PERIOD, OSC_PERIOD, EMA_LONG, RSI_PERIOD)
@@ -90,6 +109,7 @@ def calc_indicators(df):
     df['wpr']       = WilliamsRIndicator(df['h'], df['l'], df['c'], lbp=14).williams_r()
     return df.dropna()
 
+
 def check_entry(symbol):
     df = fetch_klines(symbol, '1h')
     if df.empty: return None
@@ -104,6 +124,7 @@ def check_entry(symbol):
     if cs>=2 and ss>=3: return 'SHORT'
     return None
 
+
 def is_early_exit(df, pos):
     last = df.iloc[-1]
     pnl_pct = ((last['c']-pos['entry_price'])/pos['entry_price']*100) if pos['side']=='LONG' else ((pos['entry_price']-last['c'])/pos['entry_price']*100)
@@ -111,6 +132,7 @@ def is_early_exit(df, pos):
     if pos['side']=='LONG' and (last['cci']<100 or last['ema9']<last['ema21'] or last['wpr']>-20): return True
     if pos['side']=='SHORT' and (last['cci']>-100 or last['ema9']>last['ema21'] or last['wpr']<-80): return True
     return False
+
 
 def cancel_tp_sl(symbol):
     try:
@@ -120,6 +142,7 @@ def cancel_tp_sl(symbol):
     except Exception as e:
         print(f"[CANCEL ERROR] {e}")
 
+
 def enter(symbol, side):
     bal   = get_usdt_balance()
     price = float(client.futures_mark_price(symbol=symbol)['markPrice'])
@@ -128,9 +151,11 @@ def enter(symbol, side):
     min_diff = tick*5
     sl = min(price-atr, price-min_diff) if side=='LONG' else max(price+atr, price+min_diff)
     tp = max(price+atr*RR_RATIO, price+min_diff) if side=='LONG' else min(price-atr*RR_RATIO, price-min_diff)
-    sl,tp = round(sl,2), round(tp,2)
+    qty_prec, price_prec = get_precision(symbol)
+    sl = round(sl, price_prec)
+    tp = round(tp, price_prec)
+    qty = round(margin * LEVERAGE / price, qty_prec)
     margin = bal*RISK_RATIO*0.95
-    qty    = round(margin*LEVERAGE/price, 3)
     client.futures_change_leverage(symbol=symbol, leverage=LEVERAGE)
     client.futures_create_order(symbol=symbol, side=SIDE_BUY if side=='LONG' else SIDE_SELL,
                                 type=ORDER_TYPE_MARKET, quantity=qty)
@@ -142,6 +167,7 @@ def enter(symbol, side):
     positions[symbol] = {'side':side,'entry_time':now,'qty':qty,'entry_price':price,'last_monitor':now}
     send_telegram(f"*ENTRY*\n{symbol} | {side}\nEntry: {float(price):.2f}\nTP: {float(tp):.2f} | SL: {float(sl):.2f}\nBalance: {float(bal):.2f} USDT")
     print(f"[ENTRY] {symbol} {side} at {price:.2f}")
+
 
 def manage():
     now = datetime.now(timezone.utc)
@@ -162,9 +188,12 @@ def manage():
             print(f"[EARLY EXIT] {sym}")
             positions.pop(sym)
 
+
 def main_loop():
+    print("[BOT STARTED] Monitoring...")
     while True:
         try:
+            print(f"[ANALYSIS] Checking symbols... Active: {len(positions)} / {MAX_POSITIONS}")
             if len(positions) < MAX_POSITIONS:
                 for sym in TRADE_SYMBOLS:
                     if sym in positions: continue
@@ -177,6 +206,7 @@ def main_loop():
         except Exception as e:
             print(f"[ERROR] {e}")
             time.sleep(10)
+
 
 if __name__ == '__main__':
     send_telegram("🤖 Bot started.")
