@@ -111,6 +111,13 @@ def round_qty(symbol, qty):
 # Entry signal
 
 def check_entry(symbol):
+     df = fetch_klines(symbol, '1h')
+    if df.empty:
+        return None
+    df = calc_indicators(df)
+    if df.empty:
+        return None
+    last = df.iloc[-1]
     df = calc_indicators(fetch_klines(symbol, '1h'))
     last = df.iloc[-1]
     if last['adx'] < MIN_ADX:
