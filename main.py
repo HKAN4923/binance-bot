@@ -7,6 +7,13 @@ from datetime import datetime, timedelta, timezone
 from binance.client import Client
 from binance.enums import *
 from dotenv import load_dotenv
+from binance.enums import (
+    SIDE_BUY, SIDE_SELL,
+    ORDER_TYPE_MARKET,
+    ORDER_TYPE_STOP_MARKET,
+    ORDER_TYPE_TAKE_PROFIT_MARKET
+)
+
 
 # .env 환경 변수 로딩
 load_dotenv()
@@ -135,4 +142,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
