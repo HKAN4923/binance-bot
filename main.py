@@ -1,5 +1,6 @@
 import os
 import time
+import math
 import threading
 import pandas as pd
 from datetime import datetime
@@ -11,7 +12,7 @@ from ta.trend import EMAIndicator, MACD, ADXIndicator
 import requests
 import logging
 
-# 1) .env 환경 변수 로드
+# 1) 환경 변수 로드
 script_dir = os.path.dirname(os.path.abspath(__file__))
 dotenv_path = os.path.join(script_dir, '.env')
 load_dotenv(dotenv_path)
@@ -32,7 +33,7 @@ LEVERAGE = 10
 SLEEP_INTERVAL = 10
 MAX_CONCURRENT = 1
 
-# 3) 로깅 및 텔레그램 알림
+# 3) 로깅 및 텔레그램
 logging.basicConfig(filename='trade_log.txt', level=logging.INFO, format='%(asctime)s - %(message)s')
 
 def log(msg):
@@ -46,16 +47,13 @@ def send_telegram(msg):
     except Exception as e:
         log(f"Telegram error: {e}")
 
-# 4) 심볼 리스트
-raw_symbols = [
-    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","ADAUSDT",
-    # 추가 심볼 생략...
-]
+# 4) 심볼 리스트 및 필터링
+raw_symbols = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","ADAUSDT"]
 
 def get_valid_symbols(symbols):
     try:
         info = client.futures_exchange_info()
-        valid = {s['symbol'] for s in info['symbols'] if s['contractType']=='PERPETUAL'}
+        valid = {s['symbol'] for s in info['symbols'] if s['contractType'] == 'PERPETUAL'}
         return [s for s in symbols if s in valid]
     except Exception as e:
         log(f"Error fetching exchange info: {e}")
@@ -68,7 +66,7 @@ if not symbols:
 current_positions = 0
 positions_lock = threading.Lock()
 
-# 5) 데이터 로드 및 지표 계산
+# 5) 지표 계산용 데이터 가져오기
 def get_df(symbol, interval):
     try:
         klines = client.futures_klines(symbol=symbol, interval=interval, limit=100)
@@ -84,7 +82,7 @@ def get_df(symbol, interval):
         log(f"get_df error for {symbol}: {e}")
         return None
 
-# 6) 진입 신호 판단
+# 6) 신호 판단
 def check_signal(df):
     last = df.iloc[-1]
     if last['adx'] < 10:
@@ -95,7 +93,20 @@ def check_signal(df):
         return 'SHORT'
     return None
 
-# 7) 잔고 조회
+# 7) 심볼별 수량 자릿수 맞추기
+def get_step_size(symbol):
+    info = client.futures_exchange_info()
+    for s in info['symbols']:
+        if s['symbol'] == symbol:
+            for f in s['filters']:
+                if f['filterType'] == 'LOT_SIZE':
+                    return float(f['stepSize'])
+    return 0.001
+
+def round_step_size(qty, step_size):
+    return math.floor(qty / step_size) * step_size
+
+# 8) 잔고 및 수량 계산
 def get_balance():
     try:
         for b in client.futures_account_balance():
@@ -105,13 +116,14 @@ def get_balance():
         log(f"get_balance error: {e}")
     return 0.0
 
-# 8) 주문 수량 계산
-def calc_qty(price, confidence):
+def calc_qty(price, confidence, symbol):
     bal = get_balance()
     alloc = bal * (0.3 if confidence == 'high' else 0.1)
-    return round(alloc / price, 6)
+    raw_qty = alloc / price
+    step = get_step_size(symbol)
+    return round_step_size(raw_qty, step)
 
-# 9) 반대 신호 판단
+# 9) 반대 시그널 판단
 def opposite_signal(df, side):
     sig = check_signal(df)
     return (side == 'LONG' and sig == 'SHORT') or (side == 'SHORT' and sig == 'LONG')
@@ -119,7 +131,7 @@ def opposite_signal(df, side):
 # 10) 거래 실행
 def execute_trade(symbol, side, price, confidence):
     global current_positions
-    qty = calc_qty(price, confidence)
+    qty = calc_qty(price, confidence, symbol)
     if qty <= 0: return
 
     client.futures_change_leverage(symbol=symbol, leverage=LEVERAGE)
@@ -153,7 +165,8 @@ def execute_trade(symbol, side, price, confidence):
             break
         time.sleep(1)
 
-# 11) 워커 함수 및 메인 루프
+# 11) 워커 및 메인
+
 def trade_worker(symbol):
     df30 = get_df(symbol, '30m')
     df1h = get_df(symbol, '1h')
@@ -180,9 +193,8 @@ def trade_worker(symbol):
     elif sig1h and not sig30:
         execute_trade(symbol, sig1h, price, 'low')
 
-
 def main():
-    print("🔮 Bot started (30m/1h 100 symbols)")
+    print("🔮 Bot started (Precision 대응 포함)")
     send_telegram("🤖 Bot started")
     while True:
         print(f"[{datetime.now():%H:%M:%S}] Cycle start...")
@@ -196,6 +208,4 @@ def main():
             t.join()
         time.sleep(SLEEP_INTERVAL)
 
-if __name__ == '__main__':
-    main()
-
+if __name__ == '__ma
