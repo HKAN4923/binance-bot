@@ -98,3 +98,12 @@
 2025-05-28 20:53:52,815 - get_df error for SOLUSDT: HTTPSConnectionPool(host='fapi.binance.com', port=443): Max retries exceeded with url: /fapi/v1/klines?interval=1h&limit=100&symbol=SOLUSDT (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000001FEB99268D0>: Failed to resolve 'fapi.binance.com' ([Errno 11001] getaddrinfo failed)"))
 2025-05-28 20:53:53,531 - get_df error for ADAUSDT: HTTPSConnectionPool(host='fapi.binance.com', port=443): Max retries exceeded with url: /fapi/v1/klines?interval=30m&limit=100&symbol=ADAUSDT (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000001FEB9926F90>: Failed to resolve 'fapi.binance.com' ([Errno 11001] getaddrinfo failed)"))
 2025-05-28 20:53:53,533 - get_df error for ADAUSDT: HTTPSConnectionPool(host='fapi.binance.com', port=443): Max retries exceeded with url: /fapi/v1/klines?interval=1h&limit=100&symbol=ADAUSDT (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x000001FEB9926360>: Failed to resolve 'fapi.binance.com' ([Errno 11001] getaddrinfo failed)"))
+2025-05-28 21:59:10,020 - get_balance error: APIError(code=-2015): Invalid API-key, IP, or permissions for action, request ip: 106.101.128.190
+2025-05-28 21:59:10,967 - get_balance error: APIError(code=-2015): Invalid API-key, IP, or permissions for action, request ip: 106.101.128.190
+2025-05-28 21:59:11,961 - get_balance error: APIError(code=-2015): Invalid API-key, IP, or permissions for action, request ip: 106.101.128.190
+2025-05-28 21:59:12,956 - get_balance error: APIError(code=-2015): Invalid API-key, IP, or permissions for action, request ip: 106.101.128.190
+2025-05-28 22:02:46,119 - Telegram error: HTTPSConnectionPool(host='api.telegram.org', port=443): Read timed out. (read timeout=10)
+2025-05-28 22:02:51,170 - SOLUSDT LONG@174.04 TP:176.30 SL:172.30 (low)
+2025-05-28 22:16:49,373 - BTCUSDT 거래 무시됨: 수량 0
+2025-05-28 22:16:51,888 - ETHUSDT SHORT@2665.43 TP:2630.78 SL:2692.09 (low)
+2025-05-28 22:16:52,901 - BNBUSDT SHORT@686.58 TP:677.65 SL:693.44 (low)
