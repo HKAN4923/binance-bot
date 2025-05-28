@@ -71,7 +71,7 @@ def send_telegram(msg):
 def get_usdt_balance():
     for asset in client.futures_account_balance():
         if asset['asset'] == 'USDT':
-            return float(asset['withdrawAvailable'])
+            return float(asset['availableBalance'])
     return 0.0
 
 
