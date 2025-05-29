@@ -125,6 +125,9 @@ def enter_position(symbol, side):
     price   = float(exchange.fetch_ticker(symbol)["last"])
     amount  = round(balance * RISK_RATIO * LEVERAGE / price, 3)
     df      = calc_indicators(fetch_ohlcv(symbol, KLINE_INTERVAL_ENTRY))
+    if df.empty:
+        return
+
     adx     = df["adx"].iloc[-1]
     tp, sl  = dynamic_tp_sl(price, adx, side)
 
