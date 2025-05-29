@@ -12,8 +12,8 @@ from binance.enums import (
     SIDE_SELL,
     ORDER_TYPE_MARKET,
     ORDER_TYPE_STOP_MARKET,
-    ORDER_TYPE_TAKE_PROFIT_MARKET
-)
+    order_type="TAKE_PROFIT_MARKET"
+
 
 from binance.exceptions import BinanceAPIException
 from telegram import Bot
@@ -146,7 +146,7 @@ def place_order(symbol, side):
         client.futures_create_order(symbol=symbol, side=SIDE_SELL if side=="long" else SIDE_BUY,
                                     type=ORDER_TYPE_TAKE_PROFIT_MARKET, stopPrice=tp, closePosition=True)
         client.futures_create_order(symbol=symbol, side=SIDE_SELL if side=="long" else SIDE_BUY,
-                                    type=ORDER_TYPE_STOP_MARKET, stopPrice=sl, closePosition=True)
+                                    type=order_type="STOP_MARKET", stopPrice=sl, closePosition=True)
 
         positions[symbol] = {
             'side': side,
