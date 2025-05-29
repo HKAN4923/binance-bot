@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import time
 import math
@@ -64,7 +62,6 @@ def get_trade_symbols():
     ]
     return usdt_symbols
 
-
 # ─── OHLCV 조회 ─────────────────────────────────────────────────────────────────
 def fetch_ohlcv(symbol, interval, limit=KLINE_LIMIT):
     data = exchange.fetch_ohlcv(symbol, timeframe=interval, limit=limit)
@@ -88,18 +85,41 @@ def calc_indicators(df):
 # ─── 진입 시그널 판단 ───────────────────────────────────────────────────────────
 def check_entry(symbol):
     df = calc_indicators(fetch_ohlcv(symbol, KLINE_INTERVAL_ENTRY))
-    if df["adx"].iloc[-1] < 20:
-        return None
+
+    # ── 데이터 부족 시 진입 신호 처리 생략 ─────────────────
     if df.empty:
         return None
 
+    if df["adx"].iloc[-1] < 20:
+        return None
+
     last = df.iloc[-1]
-    ls = sum([last["rsi"]<40, last["macd_diff"]>0, last["c"]>last["ema_long"], last["stoch"]<20])
-    ss = sum([last["rsi"]>60, last["macd_diff"]<0, last["c"]<last["ema_long"], last["stoch"]>80])
-    cl = sum([last["macd_diff"]>0, last["c"]>last["ema_long"], last["adx"]>20])
-    cs = sum([last["macd_diff"]<0, last["c"]<last["ema_long"], last["adx"]>20])
-    if cl>=2 and ls>=3: return "long"
-    if cs>=2 and ss>=3: return "short"
+    ls = sum([
+        last["rsi"] < 40,
+        last["macd_diff"] > 0,
+        last["c"] > last["ema_long"],
+        last["stoch"] < 20
+    ])
+    ss = sum([
+        last["rsi"] > 60,
+        last["macd_diff"] < 0,
+        last["c"] < last["ema_long"],
+        last["stoch"] > 80
+    ])
+    cl = sum([
+        last["macd_diff"] > 0,
+        last["c"] > last["ema_long"],
+        last["adx"] > 20
+    ])
+    cs = sum([
+        last["macd_diff"] < 0,
+        last["c"] < last["ema_long"],
+        last["adx"] > 20
+    ])
+    if cl >= 2 and ls >= 3:
+        return "long"
+    if cs >= 2 and ss >= 3:
+        return "short"
     return None
 
 # ─── 동적 TP/SL 계산 ────────────────────────────────────────────────────────────
