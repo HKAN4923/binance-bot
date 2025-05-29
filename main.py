@@ -7,7 +7,14 @@ import traceback
 import asyncio
 import math  # added for precision calculation
 from binance.client import Client
-from binance.enums import *
+from binance.enums import (
+    SIDE_BUY,
+    SIDE_SELL,
+    ORDER_TYPE_MARKET,
+    ORDER_TYPE_STOP_MARKET,
+    ORDER_TYPE_TAKE_PROFIT_MARKET
+)
+
 from binance.exceptions import BinanceAPIException
 from telegram import Bot
 from dotenv import load_dotenv
