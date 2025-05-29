@@ -89,7 +89,7 @@ def calc_indicators(df):
 def check_entry(symbol):
     df = calc_indicators(fetch_ohlcv(symbol, KLINE_INTERVAL_ENTRY))
     if df["adx"].iloc[-1] < 20:
-        return None
+    return None
     if df.empty:
     return None
 
