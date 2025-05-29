@@ -1,225 +1,184 @@
+# main.py
 import os
-import time
-import pytz
-import schedule
-import logging
-import traceback
+import asyncio
+import ccxt
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-from binance.client import Client
-from binance.enums import *
-from binance.exceptions import BinanceAPIException
+import time
+import datetime
+import schedule
 from dotenv import load_dotenv
-import telegram
+from telegram import Bot
+from ta.momentum import RSIIndicator, StochasticOscillator
+from ta.trend import MACD, EMAIndicator, ADXIndicator
 
-# Load environment
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
-API_SECRET = os.getenv("BINANCE_API_SECRET")
+SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-client = Client(API_KEY, API_SECRET)
-bot = telegram.Bot(token=TELEGRAM_TOKEN)
-KST = pytz.timezone('Asia/Seoul')
+bot = Bot(token=TELEGRAM_TOKEN)
+exchange = ccxt.binance({
+    'apiKey': API_KEY,
+    'secret': SECRET_KEY,
+    'enableRateLimit': True,
+    'options': {'defaultType': 'future'}
+})
 
-positions = {}
+open_positions = {}
 trade_history = []
 
-def send_message(text):
-    try:
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
-    except Exception as e:
-        print(f"텔레그램 전송 오류: {e}")
+async def send_telegram(text):
+    await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
 
-def get_symbols():
-    info = client.futures_exchange_info()
-    usdt_pairs = [s['symbol'] for s in info['symbols']
-                  if s['quoteAsset'] == 'USDT' and s['contractType'] == 'PERPETUAL']
-    volumes = {}
-    for symbol in usdt_pairs:
-        try:
-            trades = client.futures_ticker_24hr(symbol=symbol)
-            volumes[symbol] = float(trades['quoteVolume'])
-        except:
-            continue
-    sorted_symbols = sorted(volumes.items(), key=lambda x: x[1], reverse=True)
-    return [s[0] for s in sorted_symbols[:100]]
-
-def fetch_ohlcv(symbol, interval='1m', limit=100):
-    klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
-    df = pd.DataFrame(klines, columns=[
-        'timestamp', 'open', 'high', 'low', 'close', 'volume',
-        'close_time', 'qav', 'num_trades', 'taker_base', 'taker_quote', 'ignore'])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df.set_index('timestamp', inplace=True)
-    df = df.astype(float)
+def fetch_ohlcv(symbol, timeframe='15m', limit=100):
+    data = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    df = pd.DataFrame(data, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
+    df['time'] = pd.to_datetime(df['time'], unit='ms')
     return df
 
-def get_signal(df):
-    df['ema9'] = df['close'].ewm(span=9).mean()
-    df['ema21'] = df['close'].ewm(span=21).mean()
-    df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
-    last = df.iloc[-1]
-    if last['ema9'] > last['ema21'] and last['rsi'] < 70:
-        return 'LONG'
-    elif last['ema9'] < last['ema21'] and last['rsi'] > 30:
-        return 'SHORT'
+def calculate_indicators(df):
+    df['rsi'] = RSIIndicator(df['close'], 14).rsi()
+    macd = MACD(df['close'])
+    df['macd'] = macd.macd_diff()
+    df['ema'] = EMAIndicator(df['close'], 20).ema_indicator()
+    df['stoch_k'] = StochasticOscillator(df['high'], df['low'], df['close']).stoch()
+    df['adx'] = ADXIndicator(df['high'], df['low'], df['close'], 14).adx()
+    return df
+
+def check_entry(df_15m, df_1h):
+    if df_15m.empty or df_1h.empty:
+        return None
+
+    last = df_15m.iloc[-1]
+    last_h = df_1h.iloc[-1]
+    if last['rsi'] < 30 and last['macd'] > 0 and last['stoch_k'] < 20 and last['adx'] > 20:
+        if last_h['rsi'] > 40:
+            return 'long'
+    elif last['rsi'] > 70 and last['macd'] < 0 and last['stoch_k'] > 80 and last['adx'] > 20:
+        if last_h['rsi'] < 60:
+            return 'short'
     return None
 
-def dynamic_tp_sl(symbol, entry_price, side):
-    tp_rate = 0.012
-    sl_rate = 0.006
-    if side == 'LONG':
-        tp = entry_price * (1 + tp_rate)
-        sl = entry_price * (1 - sl_rate)
-    else:
-        tp = entry_price * (1 - tp_rate)
-        sl = entry_price * (1 + sl_rate)
-    return round(tp, 4), round(sl, 4)
+def place_order(symbol, side, amount, entry_price):
+    tp_ratio = 1.5 if side == 'long' else -1.5
+    sl_ratio = -0.8 if side == 'long' else 0.8
 
-def place_order(symbol, signal):
+    tp_price = round(entry_price * (1 + tp_ratio / 100), 4)
+    sl_price = round(entry_price * (1 + sl_ratio / 100), 4)
+    position_side = 'BUY' if side == 'long' else 'SELL'
+
     try:
-        balance = float(client.futures_account_balance()[1]['balance'])
-        price = float(client.futures_mark_price(symbol=symbol)['markPrice'])
-        qty = round((balance * 0.1 * 10) / price, 3)
-        side = SIDE_BUY if signal == 'LONG' else SIDE_SELL
-        order = client.futures_create_order(
-            symbol=symbol,
-            side=side,
-            type=ORDER_TYPE_MARKET,
-            quantity=qty,
-        )
-        entry_price = float(order['fills'][0]['price'])
-        tp, sl = dynamic_tp_sl(symbol, entry_price, signal)
-        tp_order = client.futures_create_order(
-            symbol=symbol,
-            side=SIDE_SELL if signal == 'LONG' else SIDE_BUY,
-            type=ORDER_TYPE_TAKE_PROFIT_MARKET,
-            stopPrice=tp,
-            closePosition=True,
-            timeInForce='GTC'
-        )
-        sl_order = client.futures_create_order(
-            symbol=symbol,
-            side=SIDE_SELL if signal == 'LONG' else SIDE_BUY,
-            type=ORDER_TYPE_STOP_MARKET,
-            stopPrice=sl,
-            closePosition=True,
-            timeInForce='GTC'
-        )
-        positions[symbol] = {
-            'side': signal,
-            'entry_time': datetime.now(),
+        order = exchange.create_market_order(symbol, position_side, amount)
+        trade_time = datetime.datetime.now()
+        open_positions[symbol] = {
+            'side': side,
             'entry_price': entry_price,
-            'tp': tp,
-            'sl': sl,
-            'qty': qty
+            'amount': amount,
+            'tp_price': tp_price,
+            'sl_price': sl_price,
+            'entry_time': trade_time
         }
-        send_message(f"✅ 진입: {symbol} {signal}\n가격: {entry_price}\nTP: {tp} / SL: {sl}")
-    except BinanceAPIException as e:
-        print(e)
+        asyncio.run(send_telegram(f"🚀 진입: {symbol}\n방향: {side}\n진입가: {entry_price:.4f}\nTP: {tp_price:.4f}\nSL: {sl_price:.4f}"))
+    except Exception as e:
+        print(f"[ERROR] 주문 실패 {symbol}: {e}")
 
 def monitor_positions():
-    to_remove = []
-    for symbol, pos in positions.items():
-        elapsed = (datetime.now() - pos['entry_time']).total_seconds()
-        pnl = check_pnl(symbol, pos['entry_price'], pos['side'], pos['qty'])
-        if int(elapsed) % 1800 < 2:  # 30분마다
-            send_message(f"📊 {symbol} 수익률: {pnl:.2f}%")
+    now = datetime.datetime.now()
+    for symbol in list(open_positions):
+        pos = open_positions[symbol]
+        price = exchange.fetch_ticker(symbol)['last']
+        pnl = (price - pos['entry_price']) / pos['entry_price'] * 100 if pos['side'] == 'long' else (pos['entry_price'] - price) / pos['entry_price'] * 100
+        elapsed = (now - pos['entry_time']).total_seconds()
+
         if elapsed >= 7200:
-            close_position(symbol, pos)
-            to_remove.append(symbol)
-    for s in to_remove:
-        del positions[s]
+            close_position(symbol, price, pnl, "⏰ 2시간 경과 청산")
+        elif elapsed >= 5400:
+            # 1시간 반 경과 재판단
+            df_15m = calculate_indicators(fetch_ohlcv(symbol, '15m'))
+            df_1h = calculate_indicators(fetch_ohlcv(symbol, '1h'))
+            new_signal = check_entry(df_15m, df_1h)
+            if new_signal and new_signal != pos['side']:
+                close_position(symbol, price, pnl, "🔄 반대 신호 감지 청산")
 
-def check_pnl(symbol, entry_price, side, qty):
-    current_price = float(client.futures_mark_price(symbol=symbol)['markPrice'])
-    change = (current_price - entry_price) / entry_price * 100
-    return change if side == 'LONG' else -change
-
-def close_position(symbol, pos):
-    side = SIDE_SELL if pos['side'] == 'LONG' else SIDE_BUY
+def close_position(symbol, price, pnl, reason):
     try:
-        client.futures_create_order(
-            symbol=symbol,
-            side=side,
-            type=ORDER_TYPE_MARKET,
-            quantity=pos['qty'],
-            reduceOnly=True
-        )
-        result = check_pnl(symbol, pos['entry_price'], pos['side'], pos['qty'])
+        side = 'SELL' if open_positions[symbol]['side'] == 'long' else 'BUY'
+        amount = open_positions[symbol]['amount']
+        exchange.create_market_order(symbol, side, amount)
         trade_history.append({
             'symbol': symbol,
-            'side': pos['side'],
-            'pnl': result,
-            'time': datetime.now(KST)
+            'side': open_positions[symbol]['side'],
+            'entry': open_positions[symbol]['entry_price'],
+            'exit': price,
+            'pnl': pnl,
+            'timestamp': datetime.datetime.now()
         })
-        send_message(f"💥 청산: {symbol} | 수익률: {result:.2f}%")
+        asyncio.run(send_telegram(f"💰 청산: {symbol}\n수익률: {pnl:.2f}%\n사유: {reason}"))
+        del open_positions[symbol]
     except Exception as e:
-        print(f"[ERROR] close failed: {e}")
+        print(f"[ERROR] 청산 실패 {symbol}: {e}")
 
-def point_report(start, end, label):
-    records = [t for t in trade_history if start <= t['time'] <= end]
-    if not records:
-        send_message(f"📋 [{label}] 거래 없음")
-        return
-    win = sum(1 for r in records if r['pnl'] > 0)
-    lose = len(records) - win
-    profit = sum(r['pnl'] for r in records)
-    rate = win / len(records) * 100
-    total = f"📊 [{label} 점호]\n총 거래: {len(records)}회\n손익: {profit:.2f}%\n{win}승 {lose}패 | 승률: {rate:.2f}%"
-    total += alltime_report()
-    send_message(total)
+def summary_report(start, end, label):
+    history = [t for t in trade_history if start <= t['timestamp'] <= end]
+    wins = sum(1 for t in history if t['pnl'] > 0)
+    losses = sum(1 for t in history if t['pnl'] <= 0)
+    total = wins + losses
+    profit = sum(t['pnl'] for t in history)
 
-def alltime_report():
-    after = datetime(2025, 5, 29, 0, 0, tzinfo=KST)
-    records = [t for t in trade_history if t['time'] >= after]
-    if not records:
-        return ""
-    win = sum(1 for r in records if r['pnl'] > 0)
-    lose = len(records) - win
-    rate = win / len(records) * 100
-    return f"\n📅 전체 승률 (5/29 이후): {win}승 {lose}패 | {rate:.2f}%"
+    overall = [t for t in trade_history if t['timestamp'] >= datetime.datetime(2025, 5, 29)]
+    owins = sum(1 for t in overall if t['pnl'] > 0)
+    ototal = len(overall)
+    orate = (owins / ototal * 100) if ototal else 0
 
-def morning_report():
-    now = datetime.now(KST)
-    start = now - timedelta(hours=9)  # 전날 21:30
-    end = now.replace(hour=6, minute=30)
-    point_report(start, end, "아침")
+    msg = f"📋 {label} 점호\n기간: {start.strftime('%H:%M')} ~ {end.strftime('%H:%M')}\n"
+    msg += f"거래횟수: {total}, 손익합계: {profit:.2f}%\n"
+    msg += f"승패: {wins}승 {losses}패, 승률: {(wins/total*100):.1f}%\n" if total else "승패 정보 없음\n"
+    msg += f"📊 5월29일 이후 전체 승률: {orate:.1f}%"
+    asyncio.run(send_telegram(msg))
 
-def evening_report():
-    now = datetime.now(KST)
-    start = now.replace(hour=6, minute=30)
-    end = now.replace(hour=21, minute=30)
-    point_report(start, end, "저녁")
+def schedule_reports():
+    now = datetime.datetime.now()
+    today = now.date()
+    schedule.every().day.at("06:30").do(lambda: summary_report(
+        datetime.datetime.combine(today - datetime.timedelta(days=1), datetime.time(21, 30)),
+        datetime.datetime.combine(today, datetime.time(6, 30)),
+        "🌅 아침"
+    ))
+    schedule.every().day.at("21:30").do(lambda: summary_report(
+        datetime.datetime.combine(today, datetime.time(6, 30)),
+        datetime.datetime.combine(today, datetime.time(21, 30)),
+        "🌇 저녁"
+    ))
 
-def main_loop():
-    symbols = get_symbols()
-    for symbol in symbols:
-        try:
-            df1m = fetch_ohlcv(symbol, '1m')
-            df1h = fetch_ohlcv(symbol, '1h')
-            sig1m = get_signal(df1m)
-            sig1h = get_signal(df1h)
-            if sig1m and sig1h == sig1m:
-                if symbol not in positions:
-                    place_order(symbol, sig1m)
-        except Exception as e:
-            print(f"[ERROR] {symbol}: {e}")
-    monitor_positions()
+asyncio.run(send_telegram("📊 자동매매 봇이 시작되었습니다."))
 
-# 스케줄
-schedule.every(10).seconds.do(main_loop)
-schedule.every().day.at("06:30").do(morning_report)
-schedule.every().day.at("21:30").do(evening_report)
-
-send_message("📢 봇 시작됨!")
+# 실행 루프
+schedule_reports()
 
 while True:
     try:
+        markets = exchange.load_markets()
+        symbols = [s for s in markets if s.endswith("USDT") and "/USDT" in s]
+
+        for symbol in symbols:
+            if symbol in open_positions:
+                continue
+            df_15m = calculate_indicators(fetch_ohlcv(symbol, '15m'))
+            df_1h = calculate_indicators(fetch_ohlcv(symbol, '1h'))
+            signal = check_entry(df_15m, df_1h)
+            if signal:
+                price = df_15m.iloc[-1]['close']
+                balance = exchange.fetch_balance()['total']['USDT']
+                amount = round(balance * 10 / price, 3)
+                place_order(symbol, signal, amount, price)
+
+        monitor_positions()
         schedule.run_pending()
         time.sleep(1)
+
     except Exception as e:
-        print(traceback.format_exc())
+        print(f"[ERROR] 실행 중 오류: {e}")
+        time.sleep(5)
+
