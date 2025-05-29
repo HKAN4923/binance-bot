@@ -5,6 +5,7 @@ import pytz
 import threading
 import traceback
 import asyncio
+import math  # added for precision calculation
 from binance.client import Client
 from binance.enums import *
 from binance.exceptions import BinanceAPIException
@@ -111,7 +112,12 @@ def place_order(symbol, side):
         client.futures_change_leverage(symbol=symbol, leverage=LEVERAGE)
         balance = float(next(b for b in client.futures_account_balance() if b['asset']=='USDT')['balance'])
         price   = float(client.futures_mark_price(symbol=symbol)['markPrice'])
-        qty     = round(balance * 0.1 * LEVERAGE / price, 3)
+        # ── 심볼별 수량 소수점 정확도 자동 계산 ──
+        info       = next(s for s in client.futures_exchange_info()['symbols'] if s['symbol']==symbol)
+        step_size  = next(f for f in info['filters'] if f['filterType']=='LOT_SIZE')['stepSize']
+        precision  = int(-math.log10(float(step_size)))
+        raw_qty    = balance * 0.1 * LEVERAGE / price
+        qty        = math.floor(raw_qty * 10**precision) / (10**precision)
 
         order = client.futures_create_order(
             symbol=symbol,
