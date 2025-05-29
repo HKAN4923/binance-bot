@@ -90,6 +90,9 @@ def check_entry(symbol):
     df = calc_indicators(fetch_ohlcv(symbol, KLINE_INTERVAL_ENTRY))
     if df["adx"].iloc[-1] < 20:
         return None
+    if df.empty:
+    return None
+
     last = df.iloc[-1]
     ls = sum([last["rsi"]<40, last["macd_diff"]>0, last["c"]>last["ema_long"], last["stoch"]<20])
     ss = sum([last["rsi"]>60, last["macd_diff"]<0, last["c"]<last["ema_long"], last["stoch"]>80])
