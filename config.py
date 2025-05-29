@@ -1,0 +1,19 @@
+# config.py
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+LEVERAGE = 10
+RISK_RATIO = 0.3
+MAX_POSITIONS = 3
+ANALYSIS_INTERVAL = 10
+TELEGRAM_SUMMARY_INTERVAL = 1800
+KLINE_INTERVAL_ENTRY = "1h"
+KLINE_LIMIT = 100
