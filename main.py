@@ -52,15 +52,37 @@ last_morning   = None
 last_evening   = None
 
 # ─── 거래 가능 심볼 필터링 ──────────────────────────────────────────────────────
-def get_trade_symbols():
-    # 바이낸스 선물 USDT 페어만 필터링
-    markets = exchange.load_markets()
-    usdt_symbols = [
-        symbol.replace('/', '') 
-        for symbol in markets 
-        if '/USDT' in symbol and not symbol.endswith('.d')
-    ]
-    return usdt_symbols
+def get_top_volume_symbols():
+    url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    try:
+        response = requests.get(url)
+        data = response.json()
+    except Exception as e:
+        print(f"데이터 요청 오류: {e}")
+        return []
+
+    symbols_with_volume = []
+    for item in data:
+        try:
+            symbol = item.get('symbol')
+            if not symbol or not symbol.endswith('USDT'):
+                continue
+            if any(sub in symbol for sub in ['BULL', 'BEAR', 'DOWN', 'UP']):
+                continue
+
+            is_usdt_perpetual = symbol.endswith('USDT')
+            volume_str = item.get('quoteVolume') if is_usdt_perpetual else item.get('volume')
+            if volume_str is None:
+                continue  # NoneType 방지
+            volume = float(volume_str)
+            symbols_with_volume.append((symbol, volume))
+        except Exception as e:
+            print(f"심볼 {item.get('symbol')} 처리 중 오류 발생: {e}")
+            continue
+
+    symbols_with_volume.sort(key=lambda x: x[1], reverse=True)
+    return [s[0] for s in symbols_with_volume[:100]]
+
 
 # ─── OHLCV 조회 ─────────────────────────────────────────────────────────────────
 def fetch_ohlcv(symbol, interval, limit=KLINE_LIMIT):
