@@ -55,12 +55,15 @@ last_evening   = None
 
 # ─── 거래 가능 심볼 필터링 ──────────────────────────────────────────────────────
 def get_trade_symbols():
-    info = exchange.fapiPublic_get_exchangeinfo()["symbols"]
-    symbols = []
-    for s in info:
-        if s["contractType"]=="PERPETUAL" and s["quoteAsset"]=="USDT" and s["status"]=="TRADING":
-            symbols.append(s["symbol"])
-    return symbols
+    # 바이낸스 선물 USDT 페어만 필터링
+    markets = exchange.load_markets()
+    usdt_symbols = [
+        symbol.replace('/', '') 
+        for symbol in markets 
+        if '/USDT' in symbol and not symbol.endswith('.d')
+    ]
+    return usdt_symbols
+
 
 # ─── OHLCV 조회 ─────────────────────────────────────────────────────────────────
 def fetch_ohlcv(symbol, interval, limit=KLINE_LIMIT):
