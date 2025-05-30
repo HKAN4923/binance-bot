@@ -8,10 +8,11 @@ import asyncio
 import math
 from binance.client import Client
 from binance.enums import (
-    SIDE_BUY, SIDE_SELL,
-    ORDER_TYPE_MARKET, ORDER_TYPE_STOP_MARKET,
-    ORDER_TYPE_TAKE_PROFIT_MARKET
+    ORDER_TYPE_MARKET,
+    SIDE_BUY,
+    SIDE_SELL,
 )
+
 from binance.exceptions import BinanceAPIException
 from telegram import Bot
 from dotenv import load_dotenv
