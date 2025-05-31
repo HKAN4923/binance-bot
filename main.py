@@ -29,7 +29,8 @@ from binance_client import (
     create_market_order,
     create_take_profit,
     create_stop_order,
-    cancel_all_orders_for_symbol
+    cancel_all_orders_for_symbol,
+    get_open_position_amt
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -52,50 +53,37 @@ VOLUME_SPIKE_MULTIPLIER = 2  # 거래량 스파이크 임계값
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# 전역 변수: 메모리 상으로도 보유 중인 포지션을 기록하지만,
+# 실제 포지션 개수는 바이낸스에서 직접 조회하여 사용합니다.
+positions = {}
+positions_lock = threading.Lock()
 
-def get_tradable_futures_symbols():
-    """
-    바이낸스 전체 USDT 페어 무기한 선물 중
-    - status == 'TRADING'
-    - marginAsset == 'USDT'
-    - contractType == 'PERPETUAL'
-    - isTradingAllowed == True
-    """
-    try:
-        exchange_info = client.futures_exchange_info()
-        tradable = []
-        for s in exchange_info['symbols']:
-            if (
-                s.get('contractType') == 'PERPETUAL'
-                and s.get('status') == 'TRADING'
-                and s.get('marginAsset') == 'USDT'
-                and s.get('symbol', '').endswith('USDT')
-                and s.get('isTradingAllowed', True)
-            ):
-                tradable.append(s['symbol'])
-        return tradable
-    except Exception as e:
-        logging.error(f"Error in get_tradable_futures_symbols: {e}")
-        return []
+# 누적 거래 내역 로그
+trade_log = []
+trade_log_lock = threading.Lock()
 
 
-def get_top_100_volume_symbols():
+def count_open_positions():
     """
-    24h 거래량 상위 100개 USDT 페어 반환
+    positions 딕셔너리에 기록된 심볼 중에서
+    실제 바이낸스에 포지션이 남아있는(symbolAmt != 0) 개수를 셉니다.
+    포지션이 없어졌을 때는 메모리에서도 자동으로 제거합니다.
     """
-    try:
-        stats_24hr = client.futures_ticker()
-        usdt_pairs = [
-            {'symbol': s['symbol'], 'volume': float(s['quoteVolume'])}
-            for s in stats_24hr
-            if s['symbol'].endswith('USDT') and s['symbol'].isupper()
-        ]
-        usdt_pairs.sort(key=lambda x: x['volume'], reverse=True)
-        top_100 = [item['symbol'] for item in usdt_pairs[:100]]
-        return top_100
-    except Exception as e:
-        logging.error(f"Error in get_top_100_volume_symbols: {e}")
-        return []
+    cnt = 0
+    with positions_lock:
+        keys = list(positions.keys())
+    for sym in keys:
+        try:
+            amt = get_open_position_amt(sym)  # 바이낸스에서 실시간 조회
+            if amt > 0:
+                cnt += 1
+            else:
+                # 실제로 포지션이 없다면 메모리에서도 제거
+                with positions_lock:
+                    positions.pop(sym, None)
+        except Exception as e:
+            logging.error(f"{sym} get_open_position_amt 오류: {e}")
+    return cnt
 
 
 def compute_tp_sl(atr_pct: Decimal):
@@ -293,15 +281,16 @@ def analyze_market():
                     tradable_symbols = get_tradable_futures_symbols()
                     logging.warning("get_top_100_volume_symbols() 실패 → 전체 tradable 심볼 사용")
 
+            # 실시간으로 바이낸스에서 포지션 개수 조회
+            current_positions = count_open_positions()
             now = to_kst(time.time())
-            with positions_lock:
-                current_positions = len(positions)
             logging.info(
-                f"{now.strftime('%H:%M:%S')} 📊 분석중. (포지션 {current_positions}/{MAX_POSITIONS})"
+                f"{now.strftime('%H:%M:%S')} 📊 분석중. (실제 포지션 {current_positions}/{MAX_POSITIONS})"
             )
 
             if current_positions < MAX_POSITIONS:
                 for sym in tradable_symbols:
+                    # 메모리 상으로는 이미 기록된 심볼 건너뛰기
                     with positions_lock:
                         if sym in positions:
                             continue
@@ -440,13 +429,21 @@ def analyze_market():
 
                         tp_price, sl_price = get_tp_sl_prices(entry_price, tp_pct, sl_pct, side)
 
-                        # ── 여기서 인자 순서가 바뀌어서 오류가 발생했었음:
-                        #    create_take_profit(sym, side, qty, tp_price)
-                        #    create_stop_order(sym, side, qty, sl_price)
-                        # → 아래처럼 “(symbol, side, price, qty)” 순서로 교정했습니다.
-                        create_take_profit(sym, side, tp_price, qty)
-                        create_stop_order(sym, side, sl_price, qty)
-                        # :contentReference[oaicite:0]{index=0} :contentReference[oaicite:1]{index=1}
+                        # ── **Precision 오류 수정**: price_precision에 맞춰 소수점 자릿수로 반올림
+                        quant = Decimal(10) ** (-price_precision)
+                        tp_price = tp_price.quantize(quant)
+                        sl_price = sl_price.quantize(quant)
+
+                        # TP/SL 주문 생성 (개별 try/except로 감싸서
+                        # “Order would immediately trigger” 예외가 떠도 흐름이 멈추지 않도록 함)
+                        try:
+                            create_take_profit(sym, side, tp_price, qty)
+                        except Exception as e:
+                            logging.error(f"{sym} TP 주문 실패: {e}")
+                        try:
+                            create_stop_order(sym, side, sl_price, qty)
+                        except Exception as e:
+                            logging.error(f"{sym} SL 주문 실패: {e}")
 
                         # Step 9: 포지션 저장 및 개수 로그
                         with positions_lock:
@@ -460,7 +457,7 @@ def analyze_market():
                                 'sig5_count': sig5_count,
                                 'aux_count': aux_count
                             }
-                            logging.info(f"✅ {sym} 포지션 저장 완료 → 현재 포지션 수: {len(positions)}")
+                        logging.info(f"✅ {sym} 포지션 저장 완료 → 메모리 상 현재 {len(positions)}개, 실제 {count_open_positions()}개")
 
                         # Step 10: 터미널 로그 및 텔레그램 전송
                         logging.info(
@@ -468,13 +465,18 @@ def analyze_market():
                             f"{tp_pct * 100:.2f}%,{sl_pct * 100:.2f}%)"
                         )
 
-                        msg = (
-                            f"<b>🔹 ENTRY: {sym}</b>\n"
-                            f"▶ 방향: {primary_sig.upper()} (TF: {primary_tf})\n"
-                            f"▶ 근거: 1m={sig1_count}, 5m={sig5_count}, 보조={aux_count}\n"
-                            f"▶ TP: {tp_pct * 100:.2f}% | SL: {sl_pct * 100:.2f}%"
-                        )
-                        send_telegram(msg)
+                        # 텔레그램에도 제대로 보내기 위해 try/except 추가
+                        try:
+                            msg = (
+                                f"<b>🔹 ENTRY: {sym}</b>\n"
+                                f"▶ 방향: {primary_sig.upper()} (TF: {primary_tf})\n"
+                                f"▶ 근거: 1m={sig1_count}, 5m={sig5_count}, 보조={aux_count}\n"
+                                f"▶ TP: {tp_pct * 100:.2f}% | SL: {sl_pct * 100:.2f}%"
+                            )
+                            send_telegram(msg)
+                        except Exception as e:
+                            logging.error(f"{sym} ENTRY 텔레그램 전송 오류: {e}")
+
                         logging.info(
                             f"{sym} 진입 완료 → entry_price={entry_price:.4f}, TP={tp_price:.4f}, SL={sl_price:.4f}"
                         )
@@ -485,10 +487,9 @@ def analyze_market():
 
                     # 포지션 개수가 제한치에 도달하면 루프 탈출
                     time.sleep(0.05)
-                    with positions_lock:
-                        if len(positions) >= MAX_POSITIONS:
-                            logging.info("MAX_POSITIONS 도달, 분석 루프 탈출")
-                            break
+                    if count_open_positions() >= MAX_POSITIONS:
+                        logging.info("MAX_POSITIONS 도달, 분석 루프 탈출")
+                        break
 
             time.sleep(ANALYSIS_INTERVAL_SEC)
 
@@ -502,8 +503,6 @@ def close_callback(symbol, side, pnl_pct, pnl_usdt):
     포지션 청산 콜백. 터미널과 텔레그램에 한 줄 요약만 남김
     """
     global wins, losses
-    timestamp = time.time()
-
     # 승/패 카운트 업데이트
     if pnl_pct > 0:
         wins += 1
@@ -515,24 +514,24 @@ def close_callback(symbol, side, pnl_pct, pnl_usdt):
     logging.info(f"{symbol} 청산 ({direction_kr}/{pnl_usdt:.2f}USDT,{pnl_pct * 100:.2f}%)")
 
     # 텔레그램: EXIT 메시지 + 전체 기록
-    msg = (
-        f"<b>🔸 EXIT: {symbol}</b>\n"
-        f"▶ 방향: {direction_kr}\n"
-        f"▶ PnL: {pnl_pct * 100:.2f}% ({pnl_usdt:.2f} USDT)\n"
-        f"▶ 전체 기록: {wins}승 {losses}패"
-    )
-    send_telegram(msg)
+    try:
+        msg = (
+            f"<b>🔸 EXIT: {symbol}</b>\n"
+            f"▶ 방향: {direction_kr}\n"
+            f"▶ PnL: {pnl_pct * 100:.2f}% ({pnl_usdt:.2f} USDT)\n"
+            f"▶ 전체 기록: {wins}승 {losses}패"
+        )
+        send_telegram(msg)
+    except Exception as e:
+        logging.error(f"{symbol} EXIT 텔레그램 전송 오류: {e}")
 
 
 if __name__ == "__main__":
-    positions = {}
-    positions_lock = threading.Lock()
-
-    trade_log = []
-    trade_log_lock = threading.Lock()
-
     # 봇 시작 알림
-    send_telegram("<b>🤖 자동매매 봇이 시작되었습니다!</b>")
+    try:
+        send_telegram("<b>🤖 자동매매 봇이 시작되었습니다!</b>")
+    except Exception as e:
+        logging.error(f"봇 시작 텔레그램 전송 오류: {e}")
     logging.info("자동매매 봇 시작 알림 전송 완료")
 
     # Trade Summary 스케줄러
