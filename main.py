@@ -48,8 +48,8 @@ logging.basicConfig(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 진입 관련 상수
-PRIMARY_THRESHOLD = 1          # 1분봉 또는 5분봉 지표 최소 개수
-AUX_COUNT_THRESHOLD = 1        # 보조지표 최소 개수
+PRIMARY_THRESHOLD = 3          # 1분봉 또는 5분봉 지표 최소 개수
+AUX_COUNT_THRESHOLD = 2        # 보조지표 최소 개수
 EMA_SHORT_LEN = 20             # 30분봉 EMA 단기
 EMA_LONG_LEN = 50              # 30분봉 EMA 장기
 VOLUME_SPIKE_MULTIPLIER = 2     # 거래량 스파이크 임계값
@@ -224,7 +224,7 @@ def analyze_market():
 
                     sig1 = check_entry_multi(df1, threshold=PRIMARY_THRESHOLD)
                     sig5 = check_entry_multi(df5, threshold=PRIMARY_THRESHOLD)
-                    logging.info(f"{sym} → sig1(1m): {sig1}, sig5(5m): {sig5}")
+                   
 
                     primary_sig = None
                     primary_tf = None
@@ -269,13 +269,18 @@ def analyze_market():
                     logging.debug(f"{sym} 볼린저 밴드 신호: {bb_sig}")
 
                     match_count = sum(1 for s in aux_signals if s == primary_sig)
-                    logging.info(f"{sym} aux_signals={aux_signals}, match_count={match_count}")
+                
 
                     if match_count < AUX_COUNT_THRESHOLD:
                         logging.debug(f"{sym} 보조지표 충족 못 함 → match_count={match_count}/{AUX_COUNT_THRESHOLD}")
                         continue
 
-                    logging.info(f"{sym} → 진입 조건 충족 (primary_sig={primary_sig}, aux match={match_count})")
+                    logging.info(
+                        f"{sym} 진입 결정 ✅  "
+                        f"Primary TF={primary_tf}, PrimarySignal={primary_sig}, "
+                        f"AuxSignals={aux_signals} (match_count={match_count})"
+                    )
+
 
                     balance = get_balance()
                     mark_price = get_mark_price(sym)
