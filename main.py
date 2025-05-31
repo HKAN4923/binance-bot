@@ -1,16 +1,19 @@
 # main.py
 
 import numpy as np
+import time
+import threading
+import logging
+from decimal import Decimal
+import pandas as pd
+
 from config import (
     MAX_POSITIONS,
     ANALYSIS_INTERVAL_SEC,
     LEVERAGE,
     FIXED_PROFIT_TARGET,
     FIXED_LOSS_CAP_BASE,
-    MIN_SL,
-    RECHECK_START,
-    RECHECK_INTERVAL,
-    MAX_TRADE_DURATION
+    MIN_SL
 )
 from utils import to_kst, calculate_qty
 from telegram_notifier import send_telegram
@@ -28,29 +31,24 @@ from binance_client import (
     create_stop_order,
     cancel_all_orders_for_symbol
 )
-import time
-import threading
-import logging
-from decimal import Decimal
-import pandas as pd
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 전역 변수
 wins = 0
 losses = 0
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 로그 설정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
 # 진입 관련 상수
-PRIMARY_THRESHOLD = 2          # 1분봉 또는 5분봉 지표 최소 개수
-AUX_COUNT_THRESHOLD = 2        # 보조지표 최소 개수
-EMA_SHORT_LEN = 20             # 30분봉 EMA 단기
-EMA_LONG_LEN = 50              # 30분봉 EMA 장기
-VOLUME_SPIKE_MULTIPLIER = 2     # 거래량 스파이크 임계값
+PRIMARY_THRESHOLD = 2       # 1m/5m 지표 최소 일치 개수
+AUX_COUNT_THRESHOLD = 2     # 보조지표 최소 일치 개수
+EMA_SHORT_LEN = 20          # 30m EMA 단기
+EMA_LONG_LEN = 50           # 30m EMA 장기
+VOLUME_SPIKE_MULTIPLIER = 2  # 거래량 스파이크 임계값
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -62,7 +60,6 @@ def get_tradable_futures_symbols():
     - marginAsset == 'USDT'
     - contractType == 'PERPETUAL'
     - isTradingAllowed == True
-    만 필터링하여 리스트 반환
     """
     try:
         exchange_info = client.futures_exchange_info()
@@ -84,7 +81,7 @@ def get_tradable_futures_symbols():
 
 def get_top_100_volume_symbols():
     """
-    바이낸스 선물 마켓에서 24시간 거래량(quoteVolume) 기준 상위 100개 USDT 심볼 반환
+    24h 거래량 상위 100개 USDT 페어 반환
     """
     try:
         stats_24hr = client.futures_ticker()
@@ -107,10 +104,8 @@ def compute_tp_sl(atr_pct: Decimal):
     """
     tp_pct_dyn = atr_pct * Decimal("1.8")
     sl_pct_dyn = atr_pct * Decimal("1.2")
-
     tp_pct = min(tp_pct_dyn, FIXED_PROFIT_TARGET)
     sl_pct = min(max(sl_pct_dyn, MIN_SL), FIXED_LOSS_CAP_BASE)
-
     return tp_pct, sl_pct
 
 
@@ -186,8 +181,8 @@ def compute_bollinger_signal(df: pd.DataFrame):
 
 def count_entry_signals(df: pd.DataFrame):
     """
-    check_entry_multi와 동일한 5개 지표 로직에서
-    ‘long’/’short’ 신호를 낸 개수를 (long_count, short_count) 형태로 반환.
+    5개 지표(RSI, MACD, EMA20/50, Stochastic, ADX) 중
+    long/short 신호 개수 반환
     """
     # 1) RSI
     delta = df['close'].diff()
@@ -278,7 +273,7 @@ def count_entry_signals(df: pd.DataFrame):
 def analyze_market():
     """
     - ANALYSIS_INTERVAL_SEC마다 시장 분석
-    - 30분마다 tradable_symbols 목록을 갱신하되, ‘24h 거래량 상위 100개 심볼’만 사용
+    - 30분마다 tradable_symbols 갱신 (24h 상위 100개 심볼)
     """
     tradable_symbols = []
     last_update = 0
@@ -291,13 +286,12 @@ def analyze_market():
                 last_update = now_ts
                 if tradable_symbols:
                     logging.info(
-                        f"유효 심볼 리스트 갱신 → 24h 상위 100개 거래량 심볼 사용: 총 {len(tradable_symbols)}개")
+                        f"유효 심볼 리스트 갱신 → 24h 상위 100개 거래량 심볼 사용: 총 {len(tradable_symbols)}개"
+                    )
                     logging.debug(f"Top5 샘플: {tradable_symbols[:5]}")
                 else:
                     tradable_symbols = get_tradable_futures_symbols()
-                    logging.warning(
-                        "get_top_100_volume_symbols() 실패 → 전체 tradable 심볼 사용"
-                    )
+                    logging.warning("get_top_100_volume_symbols() 실패 → 전체 tradable 심볼 사용")
 
             now = to_kst(time.time())
             with positions_lock:
@@ -318,14 +312,10 @@ def analyze_market():
                     time.sleep(0.1)
 
                     if df1 is None or len(df1) < 50:
-                        logging.warning(
-                            f"{sym} 1분봉 데이터 부족/오류 → df1 is None or len<50"
-                        )
+                        logging.warning(f"{sym} 1분봉 데이터 부족/오류 → df1 is None or len<50")
                         continue
                     if df5 is None or len(df5) < 50:
-                        logging.warning(
-                            f"{sym} 5분봉 데이터 부족/오류 → df5 is None or len<50"
-                        )
+                        logging.warning(f"{sym} 5분봉 데이터 부족/오류 → df5 is None or len<50")
                         continue
 
                     sig1 = check_entry_multi(df1, threshold=PRIMARY_THRESHOLD)
@@ -343,23 +333,16 @@ def analyze_market():
                         primary_sig = sig1
                         primary_tf = 'both'
                     else:
-                        logging.debug(
-                            f"{sym} primary 신호 불충분 or 상반됨 → sig1={sig1}, sig5={sig5}"
-                        )
+                        logging.debug(f"{sym} primary 신호 불충분/상반됨 → sig1={sig1}, sig5={sig5}")
                         continue
 
-                    # 보조지표 OR
+                    # 보조지표 OR 로직
                     aux_signals = []
-
                     df30 = get_ohlcv(sym, '30m', limit=EMA_LONG_LEN + 2)
                     if df30 is None or len(df30) < EMA_LONG_LEN:
-                        logging.warning(
-                            f"{sym} 30분봉 데이터 부족/오류 → df30 is None or len<{EMA_LONG_LEN}"
-                        )
+                        logging.warning(f"{sym} 30분봉 데이터 부족/오류 → df30 is None or len<{EMA_LONG_LEN}")
                     else:
-                        calculate_ema_cross(
-                            df30, short_len=EMA_SHORT_LEN, long_len=EMA_LONG_LEN
-                        )
+                        calculate_ema_cross(df30, short_len=EMA_SHORT_LEN, long_len=EMA_LONG_LEN)
                         last_ema_short = df30[f"_ema{EMA_SHORT_LEN}"].iloc[-1]
                         last_ema_long = df30[f"_ema{EMA_LONG_LEN}"].iloc[-1]
                         if last_ema_short > last_ema_long:
@@ -384,16 +367,16 @@ def analyze_market():
                         continue
 
                     # ───────────────────────────────────────────────────
-                    # 진입 조건이 충족되었을 때만 아래 블럭이 실행됩니다.
+                    # 진입 조건 충족 시 진입 블럭
                     # ───────────────────────────────────────────────────
 
                     try:
-                        # Step 1: 진입 수량 계산을 위한 정보 수집
+                        # Step 1: 진입 수량 계산 정보 수집
                         balance = get_balance()
                         mark_price = get_mark_price(sym)
                         price_precision, qty_precision, min_qty = get_precision(sym)
 
-                        # Step 2: ATR 계산 → TP/SL 비율 계산
+                        # Step 2: ATR → TP/SL 비율 계산
                         last_row = df5.iloc[-1]
                         high = Decimal(str(last_row['high']))
                         low = Decimal(str(last_row['low']))
@@ -401,30 +384,31 @@ def analyze_market():
                         atr_pct = (high - low) / close
                         tp_pct, sl_pct = compute_tp_sl(atr_pct)
 
-                        # Step 3: 신호 개수 계산 (진입 근거용)
+                        # Step 3: 지표 개수 계산
                         sig1_long, sig1_short = count_entry_signals(df1)
                         sig5_long, sig5_short = count_entry_signals(df5)
                         sig1_count = max(sig1_long, sig1_short)
                         sig5_count = max(sig5_long, sig5_short)
                         aux_count = match_count
 
-                        # Step 4: 진입 방향
+                        # Step 4: 진입 방향 설정
                         side = "BUY" if primary_sig == "long" else "SELL"
                         direction_kr = "롱" if primary_sig == "long" else "숏"
 
-                        # Step 5: 수량 계산
+                        # Step 5: 수량 계산 (자금의 30% 사용)
                         qty = calculate_qty(
                             balance,
                             Decimal(str(mark_price)),
                             LEVERAGE,
-                            Decimal("1"),
+                            Decimal("0.3"),
                             qty_precision,
                             min_qty
                         )
                         if qty == 0 or qty < Decimal(str(min_qty)):
+                            logging.warning(f"{sym} 수량 계산 실패/최소 수량 미달 → qty={qty}, min_qty={min_qty}")
                             continue
 
-                        # Step 6: 시장가 진입
+                        # Step 6: 시장가 주문
                         entry_order = create_market_order(sym, side, qty)
                         if entry_order is None:
                             logging.warning(f"{sym} 진입 실패 → 주문 실패 또는 증거금 부족")
@@ -458,7 +442,7 @@ def analyze_market():
                         create_take_profit(sym, side, qty, tp_price)
                         create_stop_order(sym, side, qty, sl_price)
 
-                        # Step 9: 포지션 저장
+                        # Step 9: 포지션 저장 및 개수 로그
                         with positions_lock:
                             positions[sym] = {
                                 'side': primary_sig,
@@ -470,8 +454,9 @@ def analyze_market():
                                 'sig5_count': sig5_count,
                                 'aux_count': aux_count
                             }
+                            logging.info(f"✅ {sym} 포지션 저장 완료 → 현재 포지션 수: {len(positions)}")
 
-                        # Step 10: 터미널 로그 및 텔레그램 전송 (진입 성공 후)
+                        # Step 10: 터미널 로그 및 텔레그램 전송
                         logging.info(
                             f"{sym} ({direction_kr}/{sig1_count},{sig5_count},{aux_count}/"
                             f"{tp_pct * 100:.2f}%,{sl_pct * 100:.2f}%)"
@@ -492,8 +477,8 @@ def analyze_market():
                         logging.error(f"{sym} 진입 블럭에서 오류 발생: {e}")
                         continue
 
+                    # 포지션 개수가 제한치에 도달하면 루프 탈출
                     time.sleep(0.05)
-
                     with positions_lock:
                         if len(positions) >= MAX_POSITIONS:
                             logging.info("MAX_POSITIONS 도달, 분석 루프 탈출")
@@ -508,24 +493,22 @@ def analyze_market():
 
 def close_callback(symbol, side, pnl_pct, pnl_usdt):
     """
-    포지션 청산 콜백. 터미널과 텔레그램에 한 줄 요약만 남깁니다.
+    포지션 청산 콜백. 터미널과 텔레그램에 한 줄 요약만 남김
     """
     global wins, losses
     timestamp = time.time()
 
-    # (1) 승/패 카운트 업데이트
+    # 승/패 카운트 업데이트
     if pnl_pct > 0:
         wins += 1
     else:
         losses += 1
 
-    # (2) 터미널: 심볼, 방향(롱/숏), 수익금(USDT), 수익률(%)
+    # 터미널: 심볼, 방향, 수익금, 수익률
     direction_kr = '롱' if side == 'long' else '숏'
-    logging.info(
-        f"{symbol} 청산 ({direction_kr}/{pnl_usdt:.2f}USDT,{pnl_pct * 100:.2f}%)"
-    )
+    logging.info(f"{symbol} 청산 ({direction_kr}/{pnl_usdt:.2f}USDT,{pnl_pct * 100:.2f}%)")
 
-    # (3) 텔레그램: EXIT 메시지 + 전체 기록(wins,losses)
+    # 텔레그램: EXIT 메시지 + 전체 기록
     msg = (
         f"<b>🔸 EXIT: {symbol}</b>\n"
         f"▶ 방향: {direction_kr}\n"
@@ -542,18 +525,20 @@ if __name__ == "__main__":
     trade_log = []
     trade_log_lock = threading.Lock()
 
+    # 봇 시작 알림
     send_telegram("<b>🤖 자동매매 봇이 시작되었습니다!</b>")
     logging.info("자동매매 봇 시작 알림 전송 완료")
 
+    # Trade Summary 스케줄러
     start_summary_scheduler(trade_log, trade_log_lock)
     logging.info("Trade Summary 스케줄러 시작 완료")
 
-    pos_monitor = PositionMonitor(
-        positions, positions_lock, trade_log, trade_log_lock, close_callback
-    )
+    # PositionMonitor 스레드 시작
+    pos_monitor = PositionMonitor(positions, positions_lock, trade_log, trade_log_lock, close_callback)
     pos_monitor.start()
     logging.info("PositionMonitor 스레드 시작 완료")
 
+    # Analyze Market 스레드 시작
     threading.Thread(target=analyze_market, daemon=True).start()
     logging.info("Analyze Market 스레드 시작 완료")
 
