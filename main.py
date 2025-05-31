@@ -1,14 +1,13 @@
-# main.py
-
 import time
 import threading
 import logging
 from decimal import Decimal
 
 import pandas as pd
+import operator  # 추가: 딕셔너리 정렬용
 
 from binance_client import (
-    client,
+    client,            # client 자체 가져와야 함
     get_ohlcv,
     get_balance,
     get_mark_price,
@@ -39,131 +38,34 @@ from config import (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 로그 설정
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s'
-)
-
+# ① [추가] 24시간 거래량 상위 100개만 뽑는 헬퍼 함수 정의
 # ─────────────────────────────────────────────────────────────────────────────
-# 진입 관련 상수
-PRIMARY_THRESHOLD = 1          # 1분봉 또는 5분봉 지표 최소 개수
-AUX_COUNT_THRESHOLD = 1        # 보조지표 최소 개수
-EMA_SHORT_LEN = 20             # 30분봉 EMA 단기
-EMA_LONG_LEN = 50              # 30분봉 EMA 장기
-VOLUME_SPIKE_MULTIPLIER = 2     # 거래량 스파이크 임계값
-
-# ─────────────────────────────────────────────────────────────────────────────
-def get_tradable_futures_symbols():
+def get_top_100_volume_symbols():
     """
-    바이낸스 전체 USDT 페어 무기한 선물 중
-    - status == 'TRADING'
-    - marginAsset == 'USDT'
-    - contractType == 'PERPETUAL'
-    - isTradingAllowed == True
-    만 필터링하여 리스트 반환
+    24시간 거래량(quoteVolume) 기준으로 상위 100개 USDT 무기한 계약 심볼을 반환.
     """
     try:
-        exchange_info = client.futures_exchange_info()
-        tradable = []
-        for s in exchange_info['symbols']:
-            if (
-                s.get('contractType') == 'PERPETUAL'
-                and s.get('status') == 'TRADING'
-                and s.get('marginAsset') == 'USDT'
-                and s.get('symbol', '').endswith('USDT')
-                and s.get('isTradingAllowed', True)
-            ):
-                tradable.append(s['symbol'])
-        return tradable
+        stats_24hr = client.futures_ticker_24hr()
+        usdt_pairs = [
+            {'symbol': s['symbol'], 'volume': float(s['quoteVolume'])}
+            for s in stats_24hr
+            if s['symbol'].endswith('USDT') and s['symbol'].isupper()
+        ]
+        # volume 내림차순 정렬
+        usdt_pairs.sort(key=operator.itemgetter('volume'), reverse=True)
+        top_100 = [item['symbol'] for item in usdt_pairs[:100]]
+        return top_100
+
     except Exception as e:
-        logging.error(f"Error in get_tradable_futures_symbols: {e}")
+        logging.error(f"Error in get_top_100_volume_symbols: {e}")
         return []
 
-def compute_tp_sl(atr_pct: Decimal):
-    """
-    ATR 기반 동적 TP/SL 계산
-    """
-    tp_pct_dyn = atr_pct * Decimal("1.8")
-    sl_pct_dyn = atr_pct * Decimal("1.2")
-
-    tp_pct = min(tp_pct_dyn, FIXED_PROFIT_TARGET)
-    sl_pct = min(max(sl_pct_dyn, MIN_SL), FIXED_LOSS_CAP_BASE)
-
-    return tp_pct, sl_pct
-
-def compute_obv_signal(df: pd.DataFrame):
-    """
-    OBV 기반 신호
-    """
-    try:
-        df = df.copy()
-        df['change'] = df['close'].diff()
-        df['vol_adj'] = df['volume'].where(df['change'] > 0, -df['volume'])
-        df['obv'] = df['vol_adj'].cumsum()
-        last_obv = df['obv'].iloc[-1]
-        prev_obv = df['obv'].iloc[-2]
-        if last_obv > prev_obv:
-            return "long"
-        elif last_obv < prev_obv:
-            return "short"
-        return None
-    except Exception as e:
-        logging.error(f"Error in compute_obv_signal: {e}")
-        return None
-
-def compute_volume_spike_signal(df: pd.DataFrame):
-    """
-    거래량 스파이크 기반 신호
-    """
-    try:
-        df = df.copy()
-        if len(df) < 21:
-            return None
-        prev_vols = df['volume'].iloc[-21:-1]
-        mean_prev_vol = prev_vols.mean()
-        last_vol = df['volume'].iloc[-1]
-        last_close = df['close'].iloc[-1]
-        prev_close = df['close'].iloc[-2]
-        if mean_prev_vol and last_vol > mean_prev_vol * VOLUME_SPIKE_MULTIPLIER:
-            if last_close > prev_close:
-                return "long"
-            elif last_close < prev_close:
-                return "short"
-        return None
-    except Exception as e:
-        logging.error(f"Error in compute_volume_spike_signal: {e}")
-        return None
-
-def compute_bollinger_signal(df: pd.DataFrame):
-    """
-    볼린저 밴드 기반 신호
-    """
-    try:
-        if len(df) < 20:
-            return None
-        df = df.copy()
-        df['sma20'] = df['close'].rolling(window=20).mean()
-        df['std20'] = df['close'].rolling(window=20).std()
-        df['upper'] = df['sma20'] + 2 * df['std20']
-        df['lower'] = df['sma20'] - 2 * df['std20']
-        last_close = df['close'].iloc[-1]
-        last_upper = df['upper'].iloc[-1]
-        last_lower = df['lower'].iloc[-1]
-        if last_close > last_upper:
-            return "long"
-        elif last_close < last_lower:
-            return "short"
-        return None
-    except Exception as e:
-        logging.error(f"Error in compute_bollinger_signal: {e}")
-        return None
 
 def analyze_market():
     """
     - ANALYSIS_INTERVAL_SEC마다 시장 분석
-    - 30분마다 유효 심볼 리스트 갱신
-    - 1분봉 OR 5분봉 다중 지표 + 보조지표 OR 구조로 진입
+    - 30분마다 tradable_symbols 목록을 갱신하되,
+      ‘24h 거래량 상위 100개 심볼’만 사용하도록 수정
     """
     tradable_symbols = []
     last_update = 0
@@ -171,11 +73,21 @@ def analyze_market():
     while True:
         try:
             now_ts = time.time()
+
             # 30분(1800초)마다 tradable_symbols 갱신
             if now_ts - last_update > 1800 or not tradable_symbols:
-                tradable_symbols = get_tradable_futures_symbols()
+                # 기존: tradable_symbols = get_tradable_futures_symbols()
+                # 변경: 거래량 상위 100개로 제한
+                tradable_symbols = get_top_100_volume_symbols()
                 last_update = now_ts
-                logging.info(f"유효 심볼 리스트 갱신: 총 {len(tradable_symbols)}개")
+
+                if tradable_symbols:
+                    logging.info(f"유효 심볼 리스트 갱신 → 24h 상위 100개 거래량 심볼 사용: 총 {len(tradable_symbols)}개")
+                    logging.debug(f"Top5 샘플: {tradable_symbols[:5]}")
+                else:
+                    # 만약 get_top_100_volume_symbols()가 실패하면 fallback
+                    tradable_symbols = get_tradable_futures_symbols()
+                    logging.warning("get_top_100_volume_symbols() 실패 → 전체 tradable 심볼 사용")
 
             now = to_kst(time.time())
             with positions_lock:
@@ -188,10 +100,15 @@ def analyze_market():
                         if sym in positions:
                             continue
 
-                    # 1) 1분봉/5분봉 데이터 수집
+                    # ─────────────────────────────────────────────────────────────
+                    # ② 1분봉/5분봉 데이터 가져올 때, Rate Limit 에 대비해 약간 더 sleep
+                    # ─────────────────────────────────────────────────────────────
                     df1 = get_ohlcv(sym, '1m', limit=50)
+                    time.sleep(0.1)   # 0.1초 추가 딜레이
                     df5 = get_ohlcv(sym, '5m', limit=50)
+                    time.sleep(0.1)
 
+                    # 데이터가 없거나 충분치 않을 경우 넘어감
                     if df1 is None or len(df1) < 50:
                         logging.warning(f"{sym} 1분봉 데이터 부족/오류 → df1 is None or len<50")
                         continue
@@ -199,10 +116,12 @@ def analyze_market():
                         logging.warning(f"{sym} 5분봉 데이터 부족/오류 → df5 is None or len<50")
                         continue
 
-                    # 2) 1분봉, 5분봉 다중 지표 체크
+                    # ─────────────────────────────────────────────────────────────
+                    # (이하 기존 로직 그대로—1m/5m 지표 체크, 보조지표, 진입 로직 등)
+                    # ─────────────────────────────────────────────────────────────
                     sig1 = check_entry_multi(df1, threshold=PRIMARY_THRESHOLD)
                     sig5 = check_entry_multi(df5, threshold=PRIMARY_THRESHOLD)
-                    logging.info(f"{sym} → sig1 (1m): {sig1}, sig5 (5m): {sig5}")
+                    logging.info(f"{sym} → sig1(1m): {sig1}, sig5(5m): {sig5}")
 
                     primary_sig = None
                     primary_tf = None
