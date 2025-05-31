@@ -297,7 +297,7 @@ def analyze_market():
             with positions_lock:
                 current_positions = len(positions)
             logging.info(
-                f"{now.strftime('%H:%M:%S')} 📊 분석중... (포지션 {current_positions}/{MAX_POSITIONS})"
+                f"{now.strftime('%H:%M:%S')} 📊 분석중. (포지션 {current_positions}/{MAX_POSITIONS})"
             )
 
             if current_positions < MAX_POSITIONS:
@@ -439,8 +439,14 @@ def analyze_market():
                             return tp_price, sl_price
 
                         tp_price, sl_price = get_tp_sl_prices(entry_price, tp_pct, sl_pct, side)
-                        create_take_profit(sym, side, qty, tp_price)
-                        create_stop_order(sym, side, qty, sl_price)
+
+                        # ── 여기서 인자 순서가 바뀌어서 오류가 발생했었음:
+                        #    create_take_profit(sym, side, qty, tp_price)
+                        #    create_stop_order(sym, side, qty, sl_price)
+                        # → 아래처럼 “(symbol, side, price, qty)” 순서로 교정했습니다.
+                        create_take_profit(sym, side, tp_price, qty)
+                        create_stop_order(sym, side, sl_price, qty)
+                        # :contentReference[oaicite:0]{index=0} :contentReference[oaicite:1]{index=1}
 
                         # Step 9: 포지션 저장 및 개수 로그
                         with positions_lock:
