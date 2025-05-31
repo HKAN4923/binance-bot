@@ -7,6 +7,9 @@ from decimal import Decimal
 import operator
 
 import pandas as pd
+wins = 0
+losses = 0
+
 
 from binance_client import (
     client,
@@ -49,7 +52,7 @@ logging.basicConfig(
 # ─────────────────────────────────────────────────────────────────────────────
 # 진입 관련 상수
 PRIMARY_THRESHOLD = 3          # 1분봉 또는 5분봉 지표 최소 개수
-AUX_COUNT_THRESHOLD = 2        # 보조지표 최소 개수
+AUX_COUNT_THRESHOLD = 3        # 보조지표 최소 개수
 EMA_SHORT_LEN = 20             # 30분봉 EMA 단기
 EMA_LONG_LEN = 50              # 30분봉 EMA 장기
 VOLUME_SPIKE_MULTIPLIER = 2     # 거래량 스파이크 임계값
@@ -178,6 +181,98 @@ def compute_bollinger_signal(df: pd.DataFrame):
         logging.error(f"Error in compute_bollinger_signal: {e}")
         return None
 
+import numpy as np
+
+def count_entry_signals(df: pd.DataFrame):
+    """
+    check_entry_multi와 동일한 5개 지표 로직에서
+    ‘long’/’short’ 신호를 낸 개수를 (long_count, short_count) 형태로 반환.
+    """
+    # 1) RSI
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    last_rsi = rsi.iloc[-1]
+    prev_rsi = rsi.iloc[-2]
+    rsi_signal = None
+    if prev_rsi < 35 and last_rsi > 35:
+        rsi_signal = "long"
+    elif prev_rsi > 65 and last_rsi < 65:
+        rsi_signal = "short"
+
+    # 2) MACD 히스토그램
+    ema_fast = df['close'].ewm(span=8, adjust=False).mean()
+    ema_slow = df['close'].ewm(span=17, adjust=False).mean()
+    macd = ema_fast - ema_slow
+    signal = macd.ewm(span=9, adjust=False).mean()
+    hist = macd - signal
+    last_hist = hist.iloc[-1]
+    prev_hist = hist.iloc[-2]
+    macd_signal = None
+    if prev_hist < 0 and last_hist > 0:
+        macd_signal = "long"
+    elif prev_hist > 0 and last_hist < 0:
+        macd_signal = "short"
+
+    # 3) EMA20/50 교차
+    df['_ema20'] = df['close'].ewm(span=20, adjust=False).mean()
+    df['_ema50'] = df['close'].ewm(span=50, adjust=False).mean()
+    last_ema20 = df['_ema20'].iloc[-1]
+    prev_ema20 = df['_ema20'].iloc[-2]
+    last_ema50 = df['_ema50'].iloc[-1]
+    prev_ema50 = df['_ema50'].iloc[-2]
+    ema_signal = None
+    if prev_ema20 < prev_ema50 and last_ema20 > last_ema50:
+        ema_signal = "long"
+    elif prev_ema20 > prev_ema50 and last_ema20 < last_ema50:
+        ema_signal = "short"
+
+    # 4) Stochastic
+    low_min = df['low'].rolling(9).min()
+    high_max = df['high'].rolling(9).max()
+    df['%K'] = (df['close'] - low_min) / (high_max - low_min) * 100
+    df['%D'] = df['%K'].rolling(3).mean()
+    last_K = df['%K'].iloc[-1]
+    prev_K = df['%K'].iloc[-2]
+    last_D = df['%D'].iloc[-1]
+    prev_D = df['%D'].iloc[-2]
+    stoch_signal = None
+    if prev_K < 20 and last_K > 20 and last_K > last_D:
+        stoch_signal = "long"
+    elif prev_K > 80 and last_K < 80 and last_K < last_D:
+        stoch_signal = "short"
+
+    # 5) ADX + DI
+    df['up_move'] = df['high'] - df['high'].shift(1)
+    df['down_move'] = df['low'].shift(1) - df['low']
+    df['+DM'] = np.where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), df['up_move'], 0.0)
+    df['-DM'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0.0)
+    df['TR'] = np.maximum.reduce([
+        df['high'] - df['low'],
+        (df['high'] - df['close'].shift(1)).abs(),
+        (df['low'] - df['close'].shift(1)).abs()
+    ])
+    atr = df['TR'].rolling(10).mean()
+    df['+DI'] = (df['+DM'] / atr) * 100
+    df['-DI'] = (df['-DM'] / atr) * 100
+    df['DX'] = (df['+DI'] - df['-DI']).abs() / (df['+DI'] + df['-DI']) * 100
+    df['ADX'] = df['DX'].rolling(10).mean()
+    last_plus = df['+DI'].iloc[-1]
+    last_minus = df['-DI'].iloc[-1]
+    last_adx = df['ADX'].iloc[-1]
+    adx_signal = None
+    if last_adx > 20 and last_plus > last_minus:
+        adx_signal = "long"
+    elif last_adx > 20 and last_minus > last_plus:
+        adx_signal = "short"
+
+    signals = [rsi_signal, macd_signal, ema_signal, stoch_signal, adx_signal]
+    long_count = sum(1 for s in signals if s == "long")
+    short_count = sum(1 for s in signals if s == "short")
+    return long_count, short_count
+
 def analyze_market():
     """
     - ANALYSIS_INTERVAL_SEC마다 시장 분석
@@ -238,7 +333,8 @@ def analyze_market():
                         logging.debug(f"{sym} primary 신호 불충분 or 상반됨 → sig1={sig1}, sig5={sig5}")
                         continue
 
-                    logging.info(f"{sym} primary 신호: {primary_sig} (TF={primary_tf})")
+                    #logging.info(f"{sym} primary 신호: {primary_sig} (TF={primary_tf})")
+
 
                     # 보조지표 OR
                     aux_signals = []
@@ -254,32 +350,40 @@ def analyze_market():
                             aux_signals.append("long")
                         elif last_ema_short < last_ema_long:
                             aux_signals.append("short")
-                        logging.debug(f"{sym} EMA30 신호: {'long' if last_ema_short>last_ema_long else 'short' if last_ema_short<last_ema_long else '없음'}")
+                       # logging.debug(f"{sym} EMA30 신호: {'long' if last_ema_short>last_ema_long else 'short' if last_ema_short<last_ema_long else '없음'}")
 
                     obv_sig = compute_obv_signal(df1)
                     if obv_sig: aux_signals.append(obv_sig)
-                    logging.debug(f"{sym} OBV 신호: {obv_sig}")
+                   # logging.debug(f"{sym} OBV 신호: {obv_sig}")
 
                     vol_sig = compute_volume_spike_signal(df1)
                     if vol_sig: aux_signals.append(vol_sig)
-                    logging.debug(f"{sym} 거래량 스파이크 신호: {vol_sig}")
+                  #  logging.debug(f"{sym} 거래량 스파이크 신호: {vol_sig}")
 
                     bb_sig = compute_bollinger_signal(df1)
                     if bb_sig: aux_signals.append(bb_sig)
-                    logging.debug(f"{sym} 볼린저 밴드 신호: {bb_sig}")
+                   # logging.debug(f"{sym} 볼린저 밴드 신호: {bb_sig}")
 
                     match_count = sum(1 for s in aux_signals if s == primary_sig)
-                
-
                     if match_count < AUX_COUNT_THRESHOLD:
-                        logging.debug(f"{sym} 보조지표 충족 못 함 → match_count={match_count}/{AUX_COUNT_THRESHOLD}")
+                        #logging.debug(f"{sym} 보조지표 충족 못 함 → match_count={match_count}/{AUX_COUNT_THRESHOLD}")
                         continue
 
+                    sig1_long, sig1_short = count_entry_signals(df1)
+                    sig1_count = max(sig1_long, sig1_short)
+                    sig5_long, sig5_short = count_entry_signals(df5)
+                    sig5_count = max(sig5_long, sig5_short)
+                    aux_count = match_count
+
+    # ② 방향을 한국어 ‘롱’/‘숏’으로 바꿔서 찍기
+                    direction_kr = '롱' if primary_sig == 'long' else '숏'
+                    tp_pct_str = f"{tp_pct * 100:.2f}%"
+                    sl_pct_str = f"{sl_pct * 100:.2f}%"
+
                     logging.info(
-                        f"{sym} 진입 결정 ✅  "
-                        f"Primary TF={primary_tf}, PrimarySignal={primary_sig}, "
-                        f"AuxSignals={aux_signals} (match_count={match_count})"
-                    )
+                        f"{sym} ({direction_kr}/{sig1_count},{sig5_count},{aux_count}/"
+                        f"{tp_pct_str},{sl_pct_str})"
+                )
 
 
                     balance = get_balance()
@@ -335,8 +439,8 @@ def analyze_market():
                     msg = (
                         f"<b>🔹 ENTRY: {sym}</b>\n"
                         f"▶ TF: {primary_tf}\n"
-                        f"▶ 방향: {primary_sig.upper()}\n"
-                        f"▶ 진입가: {entry_price:.4f}\n"
+                        f"▶ 방향: {primary_sig.upper()} (TF: {primary_tf})\n"
+                        f"▶ 근거: 1m={sig1_count}, 5m={sig5_count}, 보조={aux_count}\n"
                         f"▶ TP: {tp_pct * 100:.2f}% | SL: {sl_pct * 100:.2f}%"
                     )
                     send_telegram(msg)
@@ -357,18 +461,32 @@ def analyze_market():
 
 def close_callback(symbol, side, pnl_pct, pnl_usdt):
     """
-    포지션 청산 콜백. trade_summary 스케줄러가 이 로그를 활용합니다.
+    포지션 청산 콜백. 터미널과 텔레그램에 한 줄 요약만 남깁니다.
     """
+    global wins, losses
     timestamp = time.time()
-    entry = {
-        'timestamp': timestamp,
-        'symbol': symbol,
-        'side': side,
-        'pnl_pct': pnl_pct,
-        'pnl_usdt': pnl_usdt,
-    }
-    with trade_log_lock:
-        trade_log.append(entry)
+
+    # (1) 승/패 카운트 업데이트
+    if pnl_pct > 0:
+        wins += 1
+    else:
+        losses += 1
+
+    # (2) 터미널: 심볼, 방향(롱/숏), 수익금(USDT), 수익률(%)
+    direction_kr = '롱' if side == 'long' else '숏'
+    logging.info(
+        f"{symbol} 청산 ({direction_kr}/{pnl_usdt:.2f}USDT,{pnl_pct * 100:.2f}%)"
+    )
+
+    # (3) 텔레그램: EXIT 메시지 + 전체 기록(wins,losses)
+    msg = (
+        f"<b>🔸 EXIT: {symbol}</b>\n"
+        f"▶ 방향: {direction_kr}\n"
+        f"▶ PnL: {pnl_pct * 100:.2f}% ({pnl_usdt:.2f} USDT)\n"
+        f"▶ 전체 기록: {wins}승 {losses}패"
+    )
+    send_telegram(msg)
+
 
 if __name__ == "__main__":
     positions = {}
