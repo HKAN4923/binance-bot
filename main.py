@@ -13,7 +13,7 @@ from config import (
     LEVERAGE,
     FIXED_PROFIT_TARGET,
     FIXED_LOSS_CAP_BASE,
-    MIN_SL
+    MIN_SL,
     MIN_TP
 )
 from utils import to_kst, calculate_qty, get_top_100_volume_symbols
