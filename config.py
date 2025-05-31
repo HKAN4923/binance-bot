@@ -2,6 +2,8 @@
 
 import os
 from decimal import Decimal
+from dotenv import load_dotenv
+load_dotenv()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 레버리지 및 포지션 최대 개수
