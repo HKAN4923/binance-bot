@@ -23,6 +23,10 @@ FIXED_LOSS_CAP_BASE = FIXED_PROFIT_TARGET / Decimal("1.75")
 # 최소 손절 폭
 #   - MIN_SL: 최소 손절 비율 (예: 0.005 → 0.5%)
 MIN_SL = Decimal(os.getenv("MIN_SL", "0.005"))
+# config.py
+
+MIN_SL = Decimal(os.getenv("MIN_SL", "0.0025"))  # 손절 최소 0.25%
+MIN_TP = Decimal(os.getenv("MIN_TP", "0.0025"))  # 익절 최소 0.25%
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 부분 익절 관련 비율
