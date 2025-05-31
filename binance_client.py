@@ -1,5 +1,6 @@
 import os
 import math
+import time
 from dotenv import load_dotenv
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
@@ -15,7 +16,7 @@ def get_open_position_amt(symbol: str) -> float:
     for p in positions:
         amt = float(p['positionAmt'])
         if amt != 0:
-            return abs(amt)  # 롱/숏 상관없이 절대값만 반환
+            return abs(amt)
     return 0.0
 
 def get_all_symbols():
@@ -32,7 +33,7 @@ def get_ohlcv(symbol, interval="5m", limit=100):
             'close_time','quote_asset_volume','num_trades',
             'taker_buy_base_asset_volume','taker_buy_quote_asset_volume','ignore'
         ])
-        for c in ['open','high','low','close']:
+        for c in ['open','high','low','close','volume']:
             df[c] = pd.to_numeric(df[c])
         return df
     except Exception:
@@ -53,7 +54,9 @@ def get_precision(symbol):
     f = next(x for x in info if x["symbol"]==symbol)
     p_price = int(-math.log10(float(next(filt for filt in f["filters"] if filt["filterType"]=="PRICE_FILTER")["tickSize"])))
     p_qty   = int(-math.log10(float(next(filt for filt in f["filters"] if filt["filterType"]=="LOT_SIZE")["stepSize"])))
-    return p_price, p_qty
+    # LOT_SIZE 필터에서 stepSize 값을 최소 주문 수량(min_qty)으로 사용
+    min_qty = float(next(filt for filt in f["filters"] if filt["filterType"]=="LOT_SIZE")["stepSize"])
+    return p_price, p_qty, min_qty
 
 def create_market_order(symbol, side, qty, reduceOnly=False):
     return client.futures_create_order(
@@ -90,4 +93,3 @@ def cancel_all_orders_for_symbol(symbol):
         print(f"[{symbol}] 기존 주문 전부 취소 완료")
     except BinanceAPIException as e:
         print(f"[{symbol}] 주문 취소 실패: {e}")
-
