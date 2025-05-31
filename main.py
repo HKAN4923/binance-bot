@@ -34,12 +34,10 @@ import time
 import threading
 import logging
 from decimal import Decimal
-import operator
-
 import pandas as pd
+
 wins = 0
 losses = 0
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 로그 설정
@@ -252,10 +250,8 @@ def count_entry_signals(df: pd.DataFrame):
     # 5) ADX + DI
     df['up_move'] = df['high'] - df['high'].shift(1)
     df['down_move'] = df['low'].shift(1) - df['low']
-    df['+DM'] = np.where((df['up_move'] > df['down_move'])
-                         & (df['up_move'] > 0), df['up_move'], 0.0)
-    df['-DM'] = np.where((df['down_move'] > df['up_move'])
-                         & (df['down_move'] > 0), df['down_move'], 0.0)
+    df['+DM'] = np.where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), df['up_move'], 0.0)
+    df['-DM'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0.0)
     df['TR'] = np.maximum.reduce([
         df['high'] - df['low'],
         (df['high'] - df['close'].shift(1)).abs(),
@@ -302,13 +298,15 @@ def analyze_market():
                 else:
                     tradable_symbols = get_tradable_futures_symbols()
                     logging.warning(
-                        "get_top_100_volume_symbols() 실패 → 전체 tradable 심볼 사용")
+                        "get_top_100_volume_symbols() 실패 → 전체 tradable 심볼 사용"
+                    )
 
             now = to_kst(time.time())
             with positions_lock:
                 current_positions = len(positions)
             logging.info(
-                f"{now.strftime('%H:%M:%S')} 📊 분석중... (포지션 {current_positions}/{MAX_POSITIONS})")
+                f"{now.strftime('%H:%M:%S')} 📊 분석중... (포지션 {current_positions}/{MAX_POSITIONS})"
+            )
 
             if current_positions < MAX_POSITIONS:
                 for sym in tradable_symbols:
@@ -323,11 +321,13 @@ def analyze_market():
 
                     if df1 is None or len(df1) < 50:
                         logging.warning(
-                            f"{sym} 1분봉 데이터 부족/오류 → df1 is None or len<50")
+                            f"{sym} 1분봉 데이터 부족/오류 → df1 is None or len<50"
+                        )
                         continue
                     if df5 is None or len(df5) < 50:
                         logging.warning(
-                            f"{sym} 5분봉 데이터 부족/오류 → df5 is None or len<50")
+                            f"{sym} 5분봉 데이터 부족/오류 → df5 is None or len<50"
+                        )
                         continue
 
                     sig1 = check_entry_multi(df1, threshold=PRIMARY_THRESHOLD)
@@ -336,17 +336,19 @@ def analyze_market():
                     primary_sig = None
                     primary_tf = None
                     if sig1 and not sig5:
-                        primary_sig = sig1; primary_tf = '1m'
+                        primary_sig = sig1
+                        primary_tf = '1m'
                     elif sig5 and not sig1:
-                        primary_sig = sig5; primary_tf = '5m'
+                        primary_sig = sig5
+                        primary_tf = '5m'
                     elif sig1 and sig5 and sig1 == sig5:
-                        primary_sig = sig1; primary_tf = 'both'
+                        primary_sig = sig1
+                        primary_tf = 'both'
                     else:
                         logging.debug(
-                            f"{sym} primary 신호 불충분 or 상반됨 → sig1={sig1}, sig5={sig5}")
+                            f"{sym} primary 신호 불충분 or 상반됨 → sig1={sig1}, sig5={sig5}"
+                        )
                         continue
-
-                    # logging.info(f"{sym} primary 신호: {primary_sig} (TF={primary_tf})")
 
                     # 보조지표 OR
                     aux_signals = []
@@ -354,100 +356,115 @@ def analyze_market():
                     df30 = get_ohlcv(sym, '30m', limit=EMA_LONG_LEN + 2)
                     if df30 is None or len(df30) < EMA_LONG_LEN:
                         logging.warning(
-                            f"{sym} 30분봉 데이터 부족/오류 → df30 is None or len<{EMA_LONG_LEN}")
+                            f"{sym} 30분봉 데이터 부족/오류 → df30 is None or len<{EMA_LONG_LEN}"
+                        )
                     else:
                         calculate_ema_cross(
-                            df30, short_len=EMA_SHORT_LEN, long_len=EMA_LONG_LEN)
+                            df30, short_len=EMA_SHORT_LEN, long_len=EMA_LONG_LEN
+                        )
                         last_ema_short = df30[f"_ema{EMA_SHORT_LEN}"].iloc[-1]
                         last_ema_long = df30[f"_ema{EMA_LONG_LEN}"].iloc[-1]
                         if last_ema_short > last_ema_long:
                             aux_signals.append("long")
                         elif last_ema_short < last_ema_long:
                             aux_signals.append("short")
-                       # logging.debug(f"{sym} EMA30 신호: {'long' if last_ema_short>last_ema_long else 'short' if last_ema_short<last_ema_long else '없음'}")
 
                     obv_sig = compute_obv_signal(df1)
-                    if obv_sig: aux_signals.append(obv_sig)
-                   # logging.debug(f"{sym} OBV 신호: {obv_sig}")
+                    if obv_sig:
+                        aux_signals.append(obv_sig)
 
                     vol_sig = compute_volume_spike_signal(df1)
-                    if vol_sig: aux_signals.append(vol_sig)
-                  #  logging.debug(f"{sym} 거래량 스파이크 신호: {vol_sig}")
+                    if vol_sig:
+                        aux_signals.append(vol_sig)
 
                     bb_sig = compute_bollinger_signal(df1)
-                    if bb_sig: aux_signals.append(bb_sig)
-                   # logging.debug(f"{sym} 볼린저 밴드 신호: {bb_sig}")
+                    if bb_sig:
+                        aux_signals.append(bb_sig)
 
-                    match_count = sum(
-                        1 for s in aux_signals if s == primary_sig)
+                    match_count = sum(1 for s in aux_signals if s == primary_sig)
                     if match_count < AUX_COUNT_THRESHOLD:
-                        # logging.debug(f"{sym} 보조지표 충족 못 함 → match_count={match_count}/{AUX_COUNT_THRESHOLD}")
                         continue
 
-    # ② 방향을 한국어 ‘롱’/‘숏’으로 바꿔서 찍기
-                    direction_kr = '롱' if primary_sig == 'long' else '숏'
-                    tp_pct_str = f"{tp_pct * 100:.2f}%"
-                    sl_pct_str = f"{sl_pct * 100:.2f}%"
-
-                    logging.info(
-                        f"{sym} ({direction_kr}/{sig1_count},{sig5_count},{aux_count}/"
-                        f"{tp_pct_str},{sl_pct_str})"
-                )
-
-                   # 진입 조건이 충족되었을 때만 아래 실행됨
-# match_count >= AUX_COUNT_THRESHOLD 상태
-
+                    # ───────────────────────────────────────────────────
+                    # 진입 조건이 충족되었을 때만 아래 블럭이 실행됩니다.
+                    # ───────────────────────────────────────────────────
 
                     # Step 1: 진입 수량 계산을 위한 정보 수집
                     balance = get_balance()
                     mark_price = get_mark_price(sym)
                     price_precision, qty_precision, min_qty = get_precision(sym)
 
-# Step 2: ATR 계산 → TP/SL 비율 계산
+                    # Step 2: ATR 계산 → TP/SL 비율 계산
                     last_row = df5.iloc[-1]
                     high = Decimal(str(last_row['high']))
                     low = Decimal(str(last_row['low']))
                     close = Decimal(str(last_row['close']))
                     atr_pct = (high - low) / close
-                    tp_pct, sl_pct = compute_tp_sl(atr_pct)  # ✅ 이걸 먼저 해야 tp_pct 사용 가능!
+                    tp_pct, sl_pct = compute_tp_sl(atr_pct)
 
-# Step 3: 신호 개수 계산 (진입 근거용)
+                    # Step 3: 신호 개수 계산 (진입 근거용)
                     sig1_long, sig1_short = count_entry_signals(df1)
                     sig5_long, sig5_short = count_entry_signals(df5)
                     sig1_count = max(sig1_long, sig1_short)
                     sig5_count = max(sig5_long, sig5_short)
                     aux_count = match_count
 
-# Step 4: 진입 방향
+                    # Step 4: 진입 방향
                     side = "BUY" if primary_sig == "long" else "SELL"
                     direction_kr = "롱" if primary_sig == "long" else "숏"
 
-# Step 5: 수량 계산
-                    qty = calculate_qty(balance, Decimal(str(mark_price)),
-                    LEVERAGE, Decimal("1"), qty_precision, min_qty)
+                    # Step 5: 수량 계산
+                    qty = calculate_qty(
+                        balance,
+                        Decimal(str(mark_price)),
+                        LEVERAGE,
+                        Decimal("1"),
+                        qty_precision,
+                        min_qty
+                    )
                     if qty == 0 or qty < Decimal(str(min_qty)):
                         return
 
-# Step 6: ✅ 터미널 로그 출력 (tp_pct/sl_pct는 이제 정의된 상태)
+                    # Step 6: ✅ 터미널 로그 출력 (tp_pct/sl_pct는 이제 정의된 상태)
                     logging.info(
                         f"{sym} ({direction_kr}/{sig1_count},{sig5_count},{aux_count}/"
                         f"{tp_pct * 100:.2f}%,{sl_pct * 100:.2f}%)"
                     )
 
-# Step 7: 시장가 진입
+                    # Step 7: 시장가 진입
                     entry_order = create_market_order(sym, side, qty)
                     if entry_order is None:
                         return
 
-# Step 8: 진입가 추정
+                    # Step 8: 진입가 추정
+                    def get_entry_price(order, fallback_price):
+                        try:
+                            if 'fills' in order and order['fills']:
+                                return Decimal(str(order['fills'][0]['price']))
+                            elif 'avgFillPrice' in order:
+                                return Decimal(str(order['avgFillPrice']))
+                            else:
+                                return Decimal(str(fallback_price))
+                        except Exception:
+                            return Decimal(str(fallback_price))
+
                     entry_price = get_entry_price(entry_order, mark_price)
 
-# Step 9: TP/SL 가격 계산 및 주문
-                    tp_price, sl_price = get_tp_sl_prices(entry_price, tp_pct, sl_pct, side)
-                    create_take_profit(sym, side, qty, tp_price)
-                    create_stop_order(sym, side, qty, sl_price)
+                    # Step 9: TP/SL 가격 계산 및 주문
+                    def get_tp_sl_prices(entry_price, tp_pct, sl_pct, side):
+                        if side == "BUY":
+                            tp_price = entry_price * (1 + tp_pct)
+                            sl_price = entry_price * (1 - sl_pct)
+                        else:
+                            tp_price = entry_price * (1 - tp_pct)
+                            sl_price = entry_price * (1 + sl_pct)
+                        return tp_price, sl_price
 
-# Step 10: 포지션 저장
+                    tp_price, sl_price = get_tp_sl_prices(entry_price, tp_pct, sl_pct, side)
+                    create_take_profit(sym, side, tp_price, qty)
+                    create_stop_order(sym, side, sl_price, qty)
+
+                    # Step 10: 포지션 저장
                     with positions_lock:
                         positions[sym] = {
                             'side': primary_sig,
@@ -460,7 +477,7 @@ def analyze_market():
                             'aux_count': aux_count
                         }
 
-# Step 11: 텔레그램 전송
+                    # Step 11: 텔레그램 전송
                     msg = (
                         f"<b>🔹 ENTRY: {sym}</b>\n"
                         f"▶ 방향: {primary_sig.upper()} (TF: {primary_tf})\n"
@@ -468,9 +485,9 @@ def analyze_market():
                         f"▶ TP: {tp_pct * 100:.2f}% | SL: {sl_pct * 100:.2f}%"
                     )
                     send_telegram(msg)
-
                     logging.info(
-                        f"{sym} 진입 완료 → entry_price={entry_price:.4f}, TP={tp_price:.4f}, SL={sl_price:.4f}")
+                        f"{sym} 진입 완료 → entry_price={entry_price:.4f}, TP={tp_price:.4f}, SL={sl_price:.4f}"
+                    )
 
                     time.sleep(0.05)
 
@@ -484,6 +501,7 @@ def analyze_market():
         except Exception as e:
             logging.error(f"Error in analyze_market: {e}")
             time.sleep(ANALYSIS_INTERVAL_SEC)
+
 
 def close_callback(symbol, side, pnl_pct, pnl_usdt):
     """
