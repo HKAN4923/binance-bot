@@ -8,8 +8,6 @@ from config import (
     FIXED_PROFIT_TARGET,
     FIXED_LOSS_CAP_BASE,
     MIN_SL,
-    PARTIAL_EXIT_RATIO,
-    PARTIAL_TARGET_RATIO,
     RECHECK_START,
     RECHECK_INTERVAL,
     MAX_TRADE_DURATION
@@ -389,105 +387,110 @@ def analyze_market():
                     # 진입 조건이 충족되었을 때만 아래 블럭이 실행됩니다.
                     # ───────────────────────────────────────────────────
 
-                    # Step 1: 진입 수량 계산을 위한 정보 수집
-                    balance = get_balance()
-                    mark_price = get_mark_price(sym)
-                    price_precision, qty_precision, min_qty = get_precision(sym)
+                    try:
+                        # Step 1: 진입 수량 계산을 위한 정보 수집
+                        balance = get_balance()
+                        mark_price = get_mark_price(sym)
+                        price_precision, qty_precision, min_qty = get_precision(sym)
 
-                    # Step 2: ATR 계산 → TP/SL 비율 계산
-                    last_row = df5.iloc[-1]
-                    high = Decimal(str(last_row['high']))
-                    low = Decimal(str(last_row['low']))
-                    close = Decimal(str(last_row['close']))
-                    atr_pct = (high - low) / close
-                    tp_pct, sl_pct = compute_tp_sl(atr_pct)
+                        # Step 2: ATR 계산 → TP/SL 비율 계산
+                        last_row = df5.iloc[-1]
+                        high = Decimal(str(last_row['high']))
+                        low = Decimal(str(last_row['low']))
+                        close = Decimal(str(last_row['close']))
+                        atr_pct = (high - low) / close
+                        tp_pct, sl_pct = compute_tp_sl(atr_pct)
 
-                    # Step 3: 신호 개수 계산 (진입 근거용)
-                    sig1_long, sig1_short = count_entry_signals(df1)
-                    sig5_long, sig5_short = count_entry_signals(df5)
-                    sig1_count = max(sig1_long, sig1_short)
-                    sig5_count = max(sig5_long, sig5_short)
-                    aux_count = match_count
+                        # Step 3: 신호 개수 계산 (진입 근거용)
+                        sig1_long, sig1_short = count_entry_signals(df1)
+                        sig5_long, sig5_short = count_entry_signals(df5)
+                        sig1_count = max(sig1_long, sig1_short)
+                        sig5_count = max(sig5_long, sig5_short)
+                        aux_count = match_count
 
-                    # Step 4: 진입 방향
-                    side = "BUY" if primary_sig == "long" else "SELL"
-                    direction_kr = "롱" if primary_sig == "long" else "숏"
+                        # Step 4: 진입 방향
+                        side = "BUY" if primary_sig == "long" else "SELL"
+                        direction_kr = "롱" if primary_sig == "long" else "숏"
 
-                    # Step 5: 수량 계산
-                    qty = calculate_qty(
-                        balance,
-                        Decimal(str(mark_price)),
-                        LEVERAGE,
-                        Decimal("1"),
-                        qty_precision,
-                        min_qty
-                    )
-                    if qty == 0 or qty < Decimal(str(min_qty)):
-                        return
+                        # Step 5: 수량 계산
+                        qty = calculate_qty(
+                            balance,
+                            Decimal(str(mark_price)),
+                            LEVERAGE,
+                            Decimal("1"),
+                            qty_precision,
+                            min_qty
+                        )
+                        if qty == 0 or qty < Decimal(str(min_qty)):
+                            continue
 
-                    # Step 6: ✅ 터미널 로그 출력 (tp_pct/sl_pct는 이제 정의된 상태)
-                    logging.info(
-                        f"{sym} ({direction_kr}/{sig1_count},{sig5_count},{aux_count}/"
-                        f"{tp_pct * 100:.2f}%,{sl_pct * 100:.2f}%)"
-                    )
+                        # Step 6: 시장가 진입
+                        entry_order = create_market_order(sym, side, qty)
+                        if entry_order is None:
+                            logging.warning(f"{sym} 진입 실패 → 주문 실패 또는 증거금 부족")
+                            continue
 
-                    # Step 7: 시장가 진입
-                    entry_order = create_market_order(sym, side, qty)
-                    if entry_order is None:
-                        return
-
-                    # Step 8: 진입가 추정
-                    def get_entry_price(order, fallback_price):
-                        try:
-                            if 'fills' in order and order['fills']:
-                                return Decimal(str(order['fills'][0]['price']))
-                            elif 'avgFillPrice' in order:
-                                return Decimal(str(order['avgFillPrice']))
-                            else:
+                        # Step 7: 진입가 추정
+                        def get_entry_price(order, fallback_price):
+                            try:
+                                if 'fills' in order and order['fills']:
+                                    return Decimal(str(order['fills'][0]['price']))
+                                elif 'avgFillPrice' in order:
+                                    return Decimal(str(order['avgFillPrice']))
+                                else:
+                                    return Decimal(str(fallback_price))
+                            except Exception:
                                 return Decimal(str(fallback_price))
-                        except Exception:
-                            return Decimal(str(fallback_price))
 
-                    entry_price = get_entry_price(entry_order, mark_price)
+                        entry_price = get_entry_price(entry_order, mark_price)
 
-                    # Step 9: TP/SL 가격 계산 및 주문
-                    def get_tp_sl_prices(entry_price, tp_pct, sl_pct, side):
-                        if side == "BUY":
-                            tp_price = entry_price * (1 + tp_pct)
-                            sl_price = entry_price * (1 - sl_pct)
-                        else:
-                            tp_price = entry_price * (1 - tp_pct)
-                            sl_price = entry_price * (1 + sl_pct)
-                        return tp_price, sl_price
+                        # Step 8: TP/SL 가격 계산 및 주문
+                        def get_tp_sl_prices(entry_price, tp_pct, sl_pct, side):
+                            if side == "BUY":
+                                tp_price = entry_price * (1 + tp_pct)
+                                sl_price = entry_price * (1 - sl_pct)
+                            else:
+                                tp_price = entry_price * (1 - tp_pct)
+                                sl_price = entry_price * (1 + sl_pct)
+                            return tp_price, sl_price
 
-                    tp_price, sl_price = get_tp_sl_prices(entry_price, tp_pct, sl_pct, side)
-                    create_take_profit(sym, side, tp_price, qty)
-                    create_stop_order(sym, side, sl_price, qty)
+                        tp_price, sl_price = get_tp_sl_prices(entry_price, tp_pct, sl_pct, side)
+                        create_take_profit(sym, side, qty, tp_price)
+                        create_stop_order(sym, side, qty, sl_price)
 
-                    # Step 10: 포지션 저장
-                    with positions_lock:
-                        positions[sym] = {
-                            'side': primary_sig,
-                            'quantity': qty,
-                            'start_time': time.time(),
-                            'interval': '1m',
-                            'primary_tf': primary_tf,
-                            'sig1_count': sig1_count,
-                            'sig5_count': sig5_count,
-                            'aux_count': aux_count
-                        }
+                        # Step 9: 포지션 저장
+                        with positions_lock:
+                            positions[sym] = {
+                                'side': primary_sig,
+                                'quantity': qty,
+                                'start_time': time.time(),
+                                'interval': '1m',
+                                'primary_tf': primary_tf,
+                                'sig1_count': sig1_count,
+                                'sig5_count': sig5_count,
+                                'aux_count': aux_count
+                            }
 
-                    # Step 11: 텔레그램 전송
-                    msg = (
-                        f"<b>🔹 ENTRY: {sym}</b>\n"
-                        f"▶ 방향: {primary_sig.upper()} (TF: {primary_tf})\n"
-                        f"▶ 근거: 1m={sig1_count}, 5m={sig5_count}, 보조={aux_count}\n"
-                        f"▶ TP: {tp_pct * 100:.2f}% | SL: {sl_pct * 100:.2f}%"
-                    )
-                    send_telegram(msg)
-                    logging.info(
-                        f"{sym} 진입 완료 → entry_price={entry_price:.4f}, TP={tp_price:.4f}, SL={sl_price:.4f}"
-                    )
+                        # Step 10: 터미널 로그 및 텔레그램 전송 (진입 성공 후)
+                        logging.info(
+                            f"{sym} ({direction_kr}/{sig1_count},{sig5_count},{aux_count}/"
+                            f"{tp_pct * 100:.2f}%,{sl_pct * 100:.2f}%)"
+                        )
+
+                        msg = (
+                            f"<b>🔹 ENTRY: {sym}</b>\n"
+                            f"▶ 방향: {primary_sig.upper()} (TF: {primary_tf})\n"
+                            f"▶ 근거: 1m={sig1_count}, 5m={sig5_count}, 보조={aux_count}\n"
+                            f"▶ TP: {tp_pct * 100:.2f}% | SL: {sl_pct * 100:.2f}%"
+                        )
+                        send_telegram(msg)
+                        logging.info(
+                            f"{sym} 진입 완료 → entry_price={entry_price:.4f}, TP={tp_price:.4f}, SL={sl_price:.4f}"
+                        )
+
+                    except Exception as e:
+                        logging.error(f"{sym} 진입 블럭에서 오류 발생: {e}")
+                        continue
 
                     time.sleep(0.05)
 
@@ -545,7 +548,9 @@ if __name__ == "__main__":
     start_summary_scheduler(trade_log, trade_log_lock)
     logging.info("Trade Summary 스케줄러 시작 완료")
 
-    pos_monitor = PositionMonitor(positions, positions_lock, trade_log, trade_log_lock, close_callback)
+    pos_monitor = PositionMonitor(
+        positions, positions_lock, trade_log, trade_log_lock, close_callback
+    )
     pos_monitor.start()
     logging.info("PositionMonitor 스레드 시작 완료")
 
