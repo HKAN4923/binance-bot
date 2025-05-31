@@ -14,6 +14,7 @@ from config import (
     FIXED_PROFIT_TARGET,
     FIXED_LOSS_CAP_BASE,
     MIN_SL
+    MIN_TP
 )
 from utils import to_kst, calculate_qty, get_top_100_volume_symbols
 from telegram_notifier import send_telegram
@@ -92,8 +93,8 @@ def compute_tp_sl(atr_pct: Decimal):
     """
     tp_pct_dyn = atr_pct * Decimal("1.8")
     sl_pct_dyn = atr_pct * Decimal("1.2")
-    tp_pct = min(tp_pct_dyn, FIXED_PROFIT_TARGET)
-    sl_pct = min(max(sl_pct_dyn, MIN_SL), FIXED_LOSS_CAP_BASE)
+    tp_pct = max(min(tp_pct_dyn, FIXED_PROFIT_TARGET), MIN_TP)
+    sl_pct = max(min(sl_pct_dyn, FIXED_LOSS_CAP_BASE), MIN_SL)
     return tp_pct, sl_pct
 
 
