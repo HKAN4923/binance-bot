@@ -51,8 +51,8 @@ logging.basicConfig(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 진입 관련 상수
-PRIMARY_THRESHOLD = 3          # 1분봉 또는 5분봉 지표 최소 개수
-AUX_COUNT_THRESHOLD = 3        # 보조지표 최소 개수
+PRIMARY_THRESHOLD = 2          # 1분봉 또는 5분봉 지표 최소 개수
+AUX_COUNT_THRESHOLD = 2        # 보조지표 최소 개수
 EMA_SHORT_LEN = 20             # 30분봉 EMA 단기
 EMA_LONG_LEN = 50              # 30분봉 EMA 장기
 VOLUME_SPIKE_MULTIPLIER = 2     # 거래량 스파이크 임계값
@@ -369,11 +369,7 @@ def analyze_market():
                         #logging.debug(f"{sym} 보조지표 충족 못 함 → match_count={match_count}/{AUX_COUNT_THRESHOLD}")
                         continue
 
-                    sig1_long, sig1_short = count_entry_signals(df1)
-                    sig1_count = max(sig1_long, sig1_short)
-                    sig5_long, sig5_short = count_entry_signals(df5)
-                    sig5_count = max(sig5_long, sig5_short)
-                    aux_count = match_count
+                    
 
     # ② 방향을 한국어 ‘롱’/‘숏’으로 바꿔서 찍기
                     direction_kr = '롱' if primary_sig == 'long' else '숏'
@@ -402,8 +398,14 @@ def analyze_market():
                     low = Decimal(str(last_row['low']))
                     close = Decimal(str(last_row['close']))
                     atr_pct = (high - low) / close
-
                     tp_pct, sl_pct = compute_tp_sl(atr_pct)
+                    
+                    sig1_long, sig1_short = count_entry_signals(df1)
+                    sig1_count = max(sig1_long, sig1_short)
+                    sig5_long, sig5_short = count_entry_signals(df5)
+                    sig5_count = max(sig5_long, sig5_short)
+                    aux_count = match_count
+
                     qty = calculate_qty(balance, Decimal(str(mark_price)), LEVERAGE, Decimal("1"), qty_precision, min_qty)
                     logging.info(f"{sym} 잔고={balance:.2f}, 가격={mark_price:.4f}, qty={qty}, min_qty={min_qty}")
                     if qty == 0 or qty < Decimal(str(min_qty)):
