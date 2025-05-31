@@ -15,7 +15,7 @@ from config import (
     FIXED_LOSS_CAP_BASE,
     MIN_SL
 )
-from utils import to_kst, calculate_qty
+from utils import to_kst, calculate_qty, get_top_100_volume_symbols
 from telegram_notifier import send_telegram
 from trade_summary import start_summary_scheduler
 from position_monitor import PositionMonitor

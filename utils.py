@@ -25,3 +25,24 @@ def calculate_qty(balance: float, price: float, leverage: int, fraction: float, 
     if qty < Decimal(str(min_qty)):
         return 0.0
     return float(qty)
+# utils.py
+
+def get_top_100_volume_symbols():
+    """
+    24시간 거래량 기준 상위 100개 USDT 페어 반환
+    """
+    from binance_client import client
+    import logging
+
+    try:
+        stats_24h = client.futures_ticker()
+        usdt_pairs = [
+            {"symbol": s["symbol"], "volume": float(s["quoteVolume"])}
+            for s in stats_24h
+            if s["symbol"].endswith("USDT")
+        ]
+        usdt_pairs.sort(key=lambda x: x["volume"], reverse=True)
+        return [s["symbol"] for s in usdt_pairs[:100]]
+    except Exception as e:
+        logging.error(f"get_top_100_volume_symbols 오류: {e}")
+        return []
