@@ -10,8 +10,11 @@ import pandas as pd
 from config import (
     MAX_POSITIONS,
     ANALYSIS_INTERVAL_SEC,
-    LEVERAGE
-    # TP/SL 관련 변수들은 삭제되었습니다.
+    LEVERAGE,
+    FIXED_PROFIT_TARGET,
+    FIXED_LOSS_CAP_BASE,
+    MIN_SL,
+    MIN_TP
 )
 from utils import to_kst, calculate_qty, get_top_100_volume_symbols, get_tradable_futures_symbols
 from telegram_notifier import send_telegram
@@ -25,6 +28,8 @@ from binance_client import (
     get_mark_price,
     get_precision,
     create_market_order,
+    create_take_profit,
+    create_stop_order,
     cancel_all_orders_for_symbol,
     get_open_position_amt,
 )
@@ -50,8 +55,6 @@ VOLUME_SPIKE_MULTIPLIER = 2  # 거래량 스파이크 임계값
 # ─────────────────────────────────────────────────────────────────────────────
 
 # 메모리 상 포지션 기록
-# 각 심볼별로 다음 정보를 저장:
-# { 'side', 'quantity', 'entry_price', 'initial_match_count', 'primary_sig' }
 positions = {}
 positions_lock = threading.Lock()
 
@@ -80,6 +83,17 @@ def count_open_positions():
         except Exception as e:
             logging.error(f"{sym} get_open_position_amt 오류: {e}")
     return cnt
+
+
+def compute_tp_sl(atr_pct: Decimal):
+    """
+    ATR 기반 동적 TP/SL 비율 계산
+    """
+    tp_pct_dyn = atr_pct * Decimal("1.8")
+    sl_pct_dyn = atr_pct * Decimal("1.2")
+    tp_pct = max(min(tp_pct_dyn, FIXED_PROFIT_TARGET), MIN_TP)
+    sl_pct = max(min(sl_pct_dyn, FIXED_LOSS_CAP_BASE), MIN_SL)
+    return tp_pct, sl_pct
 
 
 def compute_obv_signal(df: pd.DataFrame):
@@ -243,89 +257,6 @@ def count_entry_signals(df: pd.DataFrame):
     return long_count, short_count
 
 
-def monitor_position(sym):
-    """
-    진입 후 10초 간격으로 지표를 재확인하여 단계별 익절/청산 처리.
-    1초마다 긴급 탈출 조건은 PositionMonitor가 담당.
-    """
-    with positions_lock:
-        pos_info = positions.get(sym)
-    if not pos_info:
-        return
-
-    side = pos_info['side']
-    entry_price = pos_info['entry_price']
-    initial_count = pos_info['initial_match_count']
-    primary_sig = pos_info['primary_sig']
-
-    while True:
-        time.sleep(10)  # 10초마다 확인
-        # 이미 포지션이 닫혔으면 종료
-        amt = get_open_position_amt(sym)
-        if amt == 0:
-            break
-
-        # 최신 1m/5m/30m 데이터로 지표 재계산
-        df1 = get_ohlcv(sym, '1m', limit=50)
-        time.sleep(0.1)
-        df5 = get_ohlcv(sym, '5m', limit=50)
-        time.sleep(0.1)
-        if df1 is None or df5 is None:
-            continue
-
-        # primary_sig와 동일한 방향의 신호 개수 재계산
-        sig1_long, sig1_short = count_entry_signals(df1)
-        sig5_long, sig5_short = count_entry_signals(df5)
-        current_count = max(sig1_long, sig1_short) + max(sig5_long, sig5_short)
-
-        # 단계별 익절/청산 로직
-        # 1) 신호 그대로 유지 → 아무 조치 없음
-        if current_count == initial_count:
-            continue
-
-        # 2) 신호가 1만큼 줄었으면 50% 익절
-        if current_count == initial_count - 1:
-            take_qty = pos_info['quantity'] * Decimal("0.5")
-            try:
-                create_market_order(sym, "SELL" if side == "BUY" else "BUY", take_qty, reduceOnly=True)
-                logging.info(f"{sym} 50% 익절 주문: {take_qty}")
-            except Exception as e:
-                logging.error(f"{sym} 50% 익절 실패: {e}")
-            # 이후에도 남은 포지션 모니터링 지속
-            continue
-
-        # 3) 신호가 2 이상 줄었으면 90% 익절
-        if current_count <= initial_count - 2:
-            take_qty = pos_info['quantity'] * Decimal("0.9")
-            try:
-                create_market_order(sym, "SELL" if side == "BUY" else "BUY", take_qty, reduceOnly=True)
-                logging.info(f"{sym} 90% 익절 주문: {take_qty}")
-            except Exception as e:
-                logging.error(f"{sym} 90% 익절 실패: {e}")
-            # 이후에도 남은 포지션 모니터링 지속
-            continue
-
-        # 4) 신호 방향이 바뀌면 전량 청산
-        # (새 primary signal 계산)
-        primary_now = None
-        if sig1_long and not sig5_long:
-            primary_now = "long"
-        elif sig5_long and not sig1_long:
-            primary_now = "long"
-        elif sig1_long and sig5_long and sig1_long == sig5_long:
-            primary_now = "long" if sig1_long > sig1_short else "short"
-        # 위 로직이 좀 복잡하면, 간단히 이전 primary_sig와 다르면 역추세로 판단
-        if primary_now and primary_now != primary_sig:
-            try:
-                create_market_order(sym, "SELL" if side == "BUY" else "BUY", amt, reduceOnly=True)
-                logging.info(f"{sym} 신호 반전 전량 청산 주문: {amt}")
-            except Exception as e:
-                logging.error(f"{sym} 신호 반전 청산 실패: {e}")
-            break  # 모니터 종료
-
-        # 나머지는 유지, 다음 10초 대기
-
-
 def analyze_market():
     """
     - ANALYSIS_INTERVAL_SEC마다 시장 분석
@@ -440,7 +371,15 @@ def analyze_market():
                             logging.error(f"{sym} get_precision 실패: {e}")
                             continue
 
-                        # Step 3: 지표 개수 계산 시 예외 처리 추가
+                        # Step 3: ATR → TP/SL 비율 계산
+                        last_row = df5.iloc[-1]
+                        high = Decimal(str(last_row['high']))
+                        low = Decimal(str(last_row['low']))
+                        close = Decimal(str(last_row['close']))
+                        atr_pct = (high - low) / close
+                        tp_pct, sl_pct = compute_tp_sl(atr_pct)
+
+                        # Step 4: 지표 개수 계산 시 예외 처리 추가
                         try:
                             sig1_long, sig1_short = count_entry_signals(df1)
                             sig5_long, sig5_short = count_entry_signals(df5)
@@ -448,27 +387,24 @@ def analyze_market():
                             logging.error(f"{sym} count_entry_signals 실패: {e}")
                             continue
 
-                        initial_count = max(sig1_long, sig1_short) + max(sig5_long, sig5_short)
+                        sig1_count = max(sig1_long, sig1_short)
+                        sig5_count = max(sig5_long, sig5_short)
+                        aux_count = match_count
 
-                        # Step 4: 진입 방향 설정
+                        # Step 5: 진입 방향 설정
                         side = "BUY" if primary_sig == "long" else "SELL"
                         direction_kr = "롱" if primary_sig == "long" else "숏"
 
-                        # Step 5: 진입 수량 계산 (자금의 30% 사용)
-                        qty = calculate_qty(
+                        # ────────────────────────────────────────────────────────────────
+                        # Step 6: 시장가 주문
+                        entry_order = create_market_order(sym, side, calculate_qty(
                             balance,
                             Decimal(str(mark_price)),
                             LEVERAGE,
                             Decimal("0.3"),
                             qty_precision,
                             min_qty
-                        )
-                        if qty == 0 or qty < Decimal(str(min_qty)):
-                            logging.warning(f"{sym} 수량 계산 실패/최소 수량 미달 → qty={qty}, min_qty={min_qty}")
-                            continue
-
-                        # Step 6: 시장가 주문
-                        entry_order = create_market_order(sym, side, qty)
+                        ))
                         if entry_order is None:
                             logging.warning(f"{sym} 진입 실패 → 주문 실패 또는 증거금 부족")
                             continue
@@ -487,32 +423,118 @@ def analyze_market():
 
                         entry_price = get_entry_price(entry_order, mark_price)
 
-                        # Step 8: 포지션 메모리 저장
+                        # Step 8: TP/SL 가격 계산
+                        def get_tp_sl_prices(entry_price, tp_pct, sl_pct, side):
+                            if side == "BUY":
+                                tp_price = entry_price * (1 + tp_pct)
+                                sl_price = entry_price * (1 - sl_pct)
+                            else:
+                                tp_price = entry_price * (1 - tp_pct)
+                                sl_price = entry_price * (1 + sl_pct)
+                            return tp_price, sl_price
+
+                        tp_price, sl_price = get_tp_sl_prices(entry_price, tp_pct, sl_pct, side)
+
+                        # tickSize 기준 최소 거리 확보 (한 tick 이상 떨어뜨림)
+                        quant = Decimal(10) ** (-price_precision)
+                        if side == "BUY":
+                            if tp_price - entry_price < quant:
+                                tp_price = entry_price + quant
+                            if entry_price - sl_price < quant:
+                                sl_price = entry_price - quant
+                        else:
+                            if entry_price - tp_price < quant:
+                                tp_price = entry_price - quant
+                            if sl_price - entry_price < quant:
+                                sl_price = entry_price + quant
+
+                        tp_price = tp_price.quantize(quant)
+                        sl_price = sl_price.quantize(quant)
+
+                        # Step 9: TP/SL 시뮬레이션
+                        opposite_side_tp = "SELL" if side == "BUY" else "BUY"
+                        sim_pass = True
+                        try:
+                            client.futures_create_test_order(
+                                symbol=sym,
+                                side=opposite_side_tp,
+                                type="TAKE_PROFIT_MARKET",
+                                stopPrice=float(tp_price),
+                                closePosition=True,
+                                timeInForce="GTC"
+                            )
+                            client.futures_create_test_order(
+                                symbol=sym,
+                                side=opposite_side_tp,
+                                type="STOP_MARKET",
+                                stopPrice=float(sl_price),
+                                closePosition=True,
+                                timeInForce="GTC"
+                            )
+                        except Exception as e:
+                            logging.warning(f"{sym} TP/SL 시뮬레이션 실패: {e}")
+                            sim_pass = False
+
+                        if not sim_pass:
+                            # 실패 시 진입가 근처 시장가 청산
+                            cancel_all_orders_for_symbol(sym)
+                            try:
+                                create_market_order(sym, "SELL" if side == "BUY" else "BUY", qty=Decimal("0"), reduceOnly=True)
+                            except Exception as close_err:
+                                logging.error(f"{sym} 청산 실패: {close_err}")
+                            continue
+                        # ─────────────────────────────────────────────────────────────────
+
+                        # Step 10: TP/SL 실제 주문
+                        try:
+                            create_take_profit(sym, side, tp_price, entry_price)  # quantity를 entry_price로 넘겨야 API 문법에 맞추세요
+                        except Exception as e:
+                            logging.error(f"{sym} TP 주문 실패: {e}")
+                        try:
+                            create_stop_order(sym, side, sl_price, entry_price)
+                        except Exception as e:
+                            logging.error(f"{sym} SL 주문 실패: {e}")
+
+                        # Step 11: 포지션 저장 및 개수 로그
+                        qty = calculate_qty(
+                            balance,
+                            entry_price,
+                            LEVERAGE,
+                            Decimal("0.3"),
+                            qty_precision,
+                            min_qty
+                        )
                         with positions_lock:
                             positions[sym] = {
                                 'side': primary_sig,
                                 'quantity': qty,
-                                'entry_price': entry_price,
-                                'initial_match_count': initial_count,
-                                'primary_sig': primary_sig
+                                'start_time': time.time(),
+                                'interval': '1m',
+                                'primary_tf': primary_tf,
+                                'sig1_count': sig1_count,
+                                'sig5_count': sig5_count,
+                                'aux_count': aux_count
                             }
                         logging.info(f"✅ {sym} 포지션 저장 완료 → 메모리 상 현재 {len(positions)}개, 실제 {count_open_positions()}개")
 
-                        # Step 9: 진입 로그 및 텔레그램 전송
-                        logging.info(f"{sym} ({direction_kr}/{initial_count}) 진입 완료 → entry_price={entry_price:.4f}")
+                        # Step 12: 터미널 로그 및 텔레그램 전송
+                        logging.info(
+                            f"{sym} ({direction_kr}/{sig1_count},{sig5_count},{aux_count}/"
+                            f"{tp_pct * 100:.2f}%,{sl_pct * 100:.2f}%)"
+                        )
                         try:
                             msg = (
                                 f"<b>🔹 ENTRY: {sym}</b>\n"
                                 f"▶ 방향: {primary_sig.upper()} (TF: {primary_tf})\n"
-                                f"▶ 초기 신호 개수: {initial_count}\n"
-                                f"▶ 진입가: {entry_price:.4f}"
+                                f"▶ 근거: 1m={sig1_count}, 5m={sig5_count}, 보조={aux_count}\n"
+                                f"▶ TP: {tp_pct * 100:.2f}% | SL: {sl_pct * 100:.2f}%"
                             )
                             send_telegram(msg)
                         except Exception as e:
                             logging.error(f"{sym} ENTRY 텔레그램 전송 오류: {e}")
-
-                        # Step 10: 진입 후 10초마다 신호 감시 스레드 시작
-                        threading.Thread(target=monitor_position, args=(sym,), daemon=True).start()
+                        logging.info(
+                            f"{sym} 진입 완료 → entry_price={entry_price:.4f}, TP={tp_price:.4f}, SL={sl_price:.4f}"
+                        )
 
                     except Exception as e:
                         logging.error(f"{sym} 진입 블럭에서 오류 발생: {e}")
@@ -557,23 +579,19 @@ def close_callback(symbol, side, pnl_pct, pnl_usdt):
 
 
 if __name__ == "__main__":
-    # 봇 시작 알림
     try:
         send_telegram("<b>🤖 자동매매 봇이 시작되었습니다!</b>")
     except Exception as e:
         logging.error(f"봇 시작 텔레그램 전송 오류: {e}")
     logging.info("자동매매 봇 시작 알림 전송 완료")
 
-    # Trade Summary 스케줄러
     start_summary_scheduler(trade_log, trade_log_lock)
     logging.info("Trade Summary 스케줄러 시작 완료")
 
-    # PositionMonitor 스레드 시작 (1초마다 긴급 탈출 체크)
     pos_monitor = PositionMonitor(positions, positions_lock, trade_log, trade_log_lock, close_callback)
     pos_monitor.start()
     logging.info("PositionMonitor 스레드 시작 완료")
 
-    # Analyze Market 스레드 시작
     threading.Thread(target=analyze_market, daemon=True).start()
     logging.info("Analyze Market 스레드 시작 완료")
 
