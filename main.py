@@ -171,8 +171,7 @@ def monitor_position(sym):
                     f"<b>🔸 EXIT: {sym}</b>\n"
                     f"▶ 방향: {primary_sig.upper()}\n"
                     f"▶ 실현 손익: {pnl_usdt:.2f} USDT ({pnl_pct * 100:.2f}%)\n"
-                    f"▶ 누적 기록: {wins}승 {losses}패"/ 총손익: {total_pnl:.2f} USDT"
-                )
+                    f"▶ 누적 기록: {wins}승 {losses}패 / 총손익: {total_pnl:.2f} USDT"
                 send_telegram(msg)
 
                 # 메모리에서 제거
