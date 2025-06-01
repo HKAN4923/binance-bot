@@ -137,6 +137,7 @@ def monitor_position(sym):
         while True:
             time.sleep(10)
             amt = get_open_position_amt(sym)
+
             # 포지션이 완전히 사라졌다면(청산됨)
             if amt == 0:
                 mark_price = Decimal(str(get_mark_price(sym)))
@@ -146,26 +147,6 @@ def monitor_position(sym):
                 else:
                     pnl_pct = (entry_price - mark_price) / entry_price
                     pnl_usdt = (entry_price - mark_price) * quantity
-
-        # ─────────── 여기서 “PnL 0.2% 도달 시 전량 매도” 추가 ───────────
-        # (예: long 포지션일 때 pnl ≥ 0.002 → 전량 익절)
-            if pnl >= Decimal("0.002"):
-                remaining_amt = get_open_position_amt(sym)
-                if remaining_amt > 0:
-                    create_market_order(sym,
-                                        "SELL" if side == "long" else "BUY",
-                                        float(remaining_amt),
-                                        reduceOnly=True)
-                # Telegram 알림
-                    send_telegram(
-                        f"<b>🔹 0.2% RE-TP: {sym}</b>\n"
-                        f"▶ 방향: {primary_sig.upper()}\n"
-                        f"▶ PnL: {pnl*100:.2f}% → 잔량 {remaining_amt:.4f} 전량 매도"
-                    )
-                    with positions_lock:
-                        positions.pop(sym, None)
-                    break  # 모니터 종료
-
 
                 # 누적 승/패 업데이트
                 if pnl_pct > 0:
@@ -197,8 +178,31 @@ def monitor_position(sym):
                     positions.pop(sym, None)
                 break
 
+            # 포지션이 남아 있는 경우 PnL 계산
             mark_price = Decimal(str(get_mark_price(sym)))
-            pnl = (mark_price - entry_price) / entry_price if primary_sig == 'long' else (entry_price - mark_price) / entry_price
+            if primary_sig == 'long':
+                pnl = (mark_price - entry_price) / entry_price
+            else:
+                pnl = (entry_price - mark_price) / entry_price
+
+            # PnL 0.2% 도달 시 전량 매도
+            if pnl >= Decimal("0.002"):
+                remaining_amt = get_open_position_amt(sym)
+                if remaining_amt > 0:
+                    create_market_order(
+                        sym,
+                        "SELL" if side == "long" else "BUY",
+                        float(remaining_amt),
+                        reduceOnly=True
+                    )
+                    send_telegram(
+                        f"<b>🔹 0.2% RE-TP: {sym}</b>\n"
+                        f"▶ 방향: {primary_sig.upper()}\n"
+                        f"▶ PnL: {pnl * 100:.2f}% → 잔량 {remaining_amt:.4f} 전량 매도"
+                    )
+                    with positions_lock:
+                        positions.pop(sym, None)
+                    break
 
             # 1) 손절 조건
             if pnl < -PIL_LOSS_THRESHOLD:
@@ -206,11 +210,14 @@ def monitor_position(sym):
                 if df1 is not None and len(df1) >= 50:
                     from strategy import check_reversal_multi
                     if not check_reversal_multi(df1, threshold=2):
-                        create_market_order(sym, 'SELL' if side == 'long' else 'BUY', float(quantity), reduceOnly=True)
+                        create_market_order(
+                            sym,
+                            "SELL" if side == "long" else "BUY",
+                            float(quantity),
+                            reduceOnly=True
+                        )
                         with positions_lock:
                             positions.pop(sym, None)
-                    
-                        send_telegram(msg)
                         break
 
             # 2) 익절 조건
@@ -219,11 +226,14 @@ def monitor_position(sym):
                 if df1 is not None and len(df1) >= 50:
                     from strategy import check_reversal_multi
                     if check_reversal_multi(df1, threshold=2):
-                        create_market_order(sym, 'SELL' if side == 'long' else 'BUY', float(quantity), reduceOnly=True)
+                        create_market_order(
+                            sym,
+                            "SELL" if side == "long" else "BUY",
+                            float(quantity),
+                            reduceOnly=True
+                        )
                         with positions_lock:
                             positions.pop(sym, None)
-                        
-                        send_telegram(msg)
                         break
 
             # 3) 부분 익절/잔량 청산
@@ -243,17 +253,32 @@ def monitor_position(sym):
                 if current_count == initial_count - 1:
                     take_amt = (Decimal(str(actual_amt)) * Decimal("0.5")).quantize(quant, rounding=ROUND_DOWN)
                     if take_amt > 0:
-                        create_market_order(sym, 'SELL' if side == 'long' else 'BUY', float(take_amt), reduceOnly=True)
+                        create_market_order(
+                            sym,
+                            "SELL" if side == "long" else "BUY",
+                            float(take_amt),
+                            reduceOnly=True
+                        )
                 # 90% 익절
                 elif current_count <= initial_count - 2:
                     take_amt = (Decimal(str(actual_amt)) * Decimal("0.9")).quantize(quant, rounding=ROUND_DOWN)
                     if take_amt > 0:
-                        create_market_order(sym, 'SELL' if side == 'long' else 'BUY', float(take_amt), reduceOnly=True)
+                        create_market_order(
+                            sym,
+                            "SELL" if side == "long" else "BUY",
+                            float(take_amt),
+                            reduceOnly=True
+                        )
 
                 # 남은 잔량이 최소수량 미만이면 전량 시장가 청산
                 remaining_amt = get_open_position_amt(sym)
                 if 0 < remaining_amt < min_qty:
-                    create_market_order(sym, 'SELL' if side == 'long' else 'BUY', float(remaining_amt), reduceOnly=True)
+                    create_market_order(
+                        sym,
+                        "SELL" if side == "long" else "BUY",
+                        float(remaining_amt),
+                        reduceOnly=True
+                    )
 
             time.sleep(0.1)
     except Exception as e:
@@ -387,12 +412,10 @@ def analyze_market():
                     sl_ord = create_stop_order(sym, 'SELL', float(sl), float(qty))
                     if not sl_ord:
                         logging.warning(f"{sym} - 기본 SL 주문 실패, TP_RATIO 기반 SL 재설정 중...")
-                        # SL = entry_price * (1 - TP_RATIO)
                         alt_sl = (entry_price * (Decimal("1") - TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
                         sl_ord = create_stop_order(sym, 'SELL', float(alt_sl), float(qty))
                         if not sl_ord:
                             logging.warning(f"{sym} - TP_RATIO 기반 SL 주문도 실패, 1% SL 고정으로 재설정 중...")
-                            # SL = entry_price * 0.99
                             fixed_sl = (entry_price * (Decimal("0.99"))).quantize(quant_price, rounding=ROUND_DOWN)
                             sl_ord = create_stop_order(sym, 'SELL', float(fixed_sl), float(qty))
                             if not sl_ord:
@@ -410,12 +433,10 @@ def analyze_market():
                     sl_ord = create_stop_order(sym, 'BUY', float(sl), float(qty))
                     if not sl_ord:
                         logging.warning(f"{sym} - 기본 SL 주문 실패, TP_RATIO 기반 SL 재설정 중...")
-                        # SL = entry_price * (1 + TP_RATIO)
                         alt_sl = (entry_price * (Decimal("1") + TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
                         sl_ord = create_stop_order(sym, 'BUY', float(alt_sl), float(qty))
                         if not sl_ord:
                             logging.warning(f"{sym} - TP_RATIO 기반 SL 주문도 실패, 1% SL 고정으로 재설정 중...")
-                            # SL = entry_price * 1.01
                             fixed_sl = (entry_price * (Decimal("1.01"))).quantize(quant_price, rounding=ROUND_DOWN)
                             sl_ord = create_stop_order(sym, 'BUY', float(fixed_sl), float(qty))
                             if not sl_ord:
