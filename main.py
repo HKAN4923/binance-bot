@@ -147,6 +147,26 @@ def monitor_position(sym):
                     pnl_pct = (entry_price - mark_price) / entry_price
                     pnl_usdt = (entry_price - mark_price) * quantity
 
+        # ─────────── 여기서 “PnL 0.2% 도달 시 전량 매도” 추가 ───────────
+        # (예: long 포지션일 때 pnl ≥ 0.002 → 전량 익절)
+            if pnl >= Decimal("0.002"):
+                remaining_amt = get_open_position_amt(sym)
+                if remaining_amt > 0:
+                    create_market_order(sym,
+                                        "SELL" if side == "long" else "BUY",
+                                        float(remaining_amt),
+                                        reduceOnly=True)
+                # Telegram 알림
+                    send_telegram(
+                        f"<b>🔹 0.2% RE-TP: {sym}</b>\n"
+                        f"▶ 방향: {primary_sig.upper()}\n"
+                        f"▶ PnL: {pnl*100:.2f}% → 잔량 {remaining_amt:.4f} 전량 매도"
+                    )
+                    with positions_lock:
+                        positions.pop(sym, None)
+                    break  # 모니터 종료
+
+
                 # 누적 승/패 업데이트
                 if pnl_pct > 0:
                     wins += 1
@@ -189,7 +209,7 @@ def monitor_position(sym):
                         create_market_order(sym, 'SELL' if side == 'long' else 'BUY', float(quantity), reduceOnly=True)
                         with positions_lock:
                             positions.pop(sym, None)
-                        msg = f"<b>🔸 STOP CLOSE: {sym}</b> ▶ PnL: {pnl * 100:.2f}% ({wins}승 {losses}패)"
+                    
                         send_telegram(msg)
                         break
 
@@ -202,7 +222,7 @@ def monitor_position(sym):
                         create_market_order(sym, 'SELL' if side == 'long' else 'BUY', float(quantity), reduceOnly=True)
                         with positions_lock:
                             positions.pop(sym, None)
-                        msg = f"<b>🔸 TAKE CLOSE: {sym}</b> ▶ PnL: {pnl * 100:.2f}% ({wins}승 {losses}패)"
+                        
                         send_telegram(msg)
                         break
 
