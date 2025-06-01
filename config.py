@@ -10,7 +10,7 @@ load_dotenv()
 # ─────────────────────────────────────────────────────────────────────────────
 
 # (1) 진입 신호용 지표 임계치
-PRIMARY_THRESHOLD   = int(os.getenv("PRIMARY_THRESHOLD", 2))    # 1분/5분 지표(5개) 중 최소 일치 개수
+PRIMARY_THRESHOLD   = int(os.getenv("PRIMARY_THRESHOLD", 3))    # 1분/5분 지표(5개) 중 최소 일치 개수
 AUX_COUNT_THRESHOLD = int(os.getenv("AUX_COUNT_THRESHOLD", 2))  # 보조 지표(30m EMA, OBV, 거래량 스파이크, 볼린저) 중 최소 일치 개수
 
 # (2) 30분 EMA 계산 기간
