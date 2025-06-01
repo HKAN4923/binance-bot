@@ -46,7 +46,7 @@ logging.basicConfig(
 )
 
 # 진입 관련 상수
-PRIMARY_THRESHOLD = 2       # 1m/5m 지표 최소 일치 개수
+PRIMARY_THRESHOLD = 3       # 1m/5m 지표 최소 일치 개수
 AUX_COUNT_THRESHOLD = 2     # 보조지표 최소 일치 개수
 EMA_SHORT_LEN = 20          # 30m EMA 단기
 EMA_LONG_LEN = 50           # 30m EMA 장기
@@ -94,39 +94,6 @@ def compute_tp_sl(atr_pct: Decimal):
     tp_pct = max(min(tp_pct_dyn, FIXED_PROFIT_TARGET), MIN_TP)
     sl_pct = max(min(sl_pct_dyn, FIXED_LOSS_CAP_BASE), MIN_SL)
     return tp_pct, sl_pct
-
-
-def simulate_tp_sl_order(symbol, side, tp_price, sl_price):
-    """
-    TP/SL 주문이 바이낸스에서 실제 가능한지 'test' 모드로 시뮬레이션.
-    둘 다 정상적으로 통과해야 True를 반환.
-    """
-    try:
-        opposite_side_tp = "SELL" if side == "BUY" else "BUY"
-        # TAKE_PROFIT_MARKET 테스트 주문
-        client.futures_create_test_order(
-            symbol=symbol,
-            side=opposite_side_tp,
-            type="TAKE_PROFIT_MARKET",
-            stopPrice=float(tp_price),
-            closePosition=True,
-            timeInForce="GTC",
-            
-        )
-        # STOP_MARKET 테스트 주문
-        client.futures_create_test_order(
-            symbol=symbol,
-            side=opposite_side_tp,
-            type="STOP_MARKET",
-            stopPrice=float(sl_price),
-            closePosition=True,
-            timeInForce="GTC",
-            
-        )
-        return True
-    except Exception as e:
-        logging.warning(f"{symbol} TP/SL 시뮬레이션 실패: {e}")
-        return False
 
 
 def compute_obv_signal(df: pd.DataFrame):
@@ -428,57 +395,21 @@ def analyze_market():
                         side = "BUY" if primary_sig == "long" else "SELL"
                         direction_kr = "롱" if primary_sig == "long" else "숏"
 
-                        # ── 진입 전 TP/SL 시뮬레이션 ──
-                        entry_price_approx = Decimal(str(mark_price))
-                        tp_price_approx = (
-                            entry_price_approx * (1 + tp_pct)
-                        ) if side == "BUY" else (
-                            entry_price_approx * (1 - tp_pct)
-                        )
-                        sl_price_approx = (
-                            entry_price_approx * (1 - sl_pct)
-                        ) if side == "BUY" else (
-                            entry_price_approx * (1 + sl_pct)
-                        )
-
-                        quant = Decimal(10) ** (-price_precision)
-                        tp_price_approx = tp_price_approx.quantize(quant)
-                        sl_price_approx = sl_price_approx.quantize(quant)
-
-                        gap_tp = abs(tp_price_approx - entry_price_approx) / entry_price_approx
-                        gap_sl = abs(entry_price_approx - sl_price_approx) / entry_price_approx
-
-                        if gap_tp < MIN_TP or gap_sl < MIN_SL:
-                            logging.info(
-                                f"{sym} → 최소 TP/SL 거리 미달 (gap_tp={gap_tp:.4f}, gap_sl={gap_sl:.4f}) → 진입 스킵"
-                            )
-                            continue
-
-                        if not simulate_tp_sl_order(sym, side, tp_price_approx, sl_price_approx):
-                            logging.info(f"{sym} → TP/SL 시뮬레이션 실패 → 진입 스킵")
-                            continue
-                        # ─────────────────────────────────────────────────────────────────
-
-                        # Step 6: 수량 계산 (자금의 30% 사용)
-                        qty = calculate_qty(
+                        # ────────────────────────────────────────────────────────────────
+                        # Step 6: 시장가 주문
+                        entry_order = create_market_order(sym, side, calculate_qty(
                             balance,
                             Decimal(str(mark_price)),
                             LEVERAGE,
                             Decimal("0.3"),
                             qty_precision,
                             min_qty
-                        )
-                        if qty == 0 or qty < Decimal(str(min_qty)):
-                            logging.warning(f"{sym} 수량 계산 실패/최소 수량 미달 → qty={qty}, min_qty={min_qty}")
-                            continue
-
-                        # Step 7: 시장가 주문
-                        entry_order = create_market_order(sym, side, qty)
+                        ))
                         if entry_order is None:
                             logging.warning(f"{sym} 진입 실패 → 주문 실패 또는 증거금 부족")
                             continue
 
-                        # Step 8: 진입가 추정
+                        # Step 7: 진입가 추정
                         def get_entry_price(order, fallback_price):
                             try:
                                 if 'fills' in order and order['fills']:
@@ -492,7 +423,7 @@ def analyze_market():
 
                         entry_price = get_entry_price(entry_order, mark_price)
 
-                        # Step 9: TP/SL 가격 계산 및 주문
+                        # Step 8: TP/SL 가격 계산
                         def get_tp_sl_prices(entry_price, tp_pct, sl_pct, side):
                             if side == "BUY":
                                 tp_price = entry_price * (1 + tp_pct)
@@ -504,19 +435,75 @@ def analyze_market():
 
                         tp_price, sl_price = get_tp_sl_prices(entry_price, tp_pct, sl_pct, side)
 
+                        # tickSize 기준 최소 거리 확보 (한 tick 이상 떨어뜨림)
+                        quant = Decimal(10) ** (-price_precision)
+                        if side == "BUY":
+                            if tp_price - entry_price < quant:
+                                tp_price = entry_price + quant
+                            if entry_price - sl_price < quant:
+                                sl_price = entry_price - quant
+                        else:
+                            if entry_price - tp_price < quant:
+                                tp_price = entry_price - quant
+                            if sl_price - entry_price < quant:
+                                sl_price = entry_price + quant
+
                         tp_price = tp_price.quantize(quant)
                         sl_price = sl_price.quantize(quant)
 
+                        # Step 9: TP/SL 시뮬레이션
+                        opposite_side_tp = "SELL" if side == "BUY" else "BUY"
+                        sim_pass = True
                         try:
-                            create_take_profit(sym, side, tp_price, qty)
+                            client.futures_create_test_order(
+                                symbol=sym,
+                                side=opposite_side_tp,
+                                type="TAKE_PROFIT_MARKET",
+                                stopPrice=float(tp_price),
+                                closePosition=True,
+                                timeInForce="GTC"
+                            )
+                            client.futures_create_test_order(
+                                symbol=sym,
+                                side=opposite_side_tp,
+                                type="STOP_MARKET",
+                                stopPrice=float(sl_price),
+                                closePosition=True,
+                                timeInForce="GTC"
+                            )
+                        except Exception as e:
+                            logging.warning(f"{sym} TP/SL 시뮬레이션 실패: {e}")
+                            sim_pass = False
+
+                        if not sim_pass:
+                            # 실패 시 진입가 근처 시장가 청산
+                            cancel_all_orders_for_symbol(sym)
+                            try:
+                                create_market_order(sym, "SELL" if side == "BUY" else "BUY", qty=Decimal("0"), reduceOnly=True)
+                            except Exception as close_err:
+                                logging.error(f"{sym} 청산 실패: {close_err}")
+                            continue
+                        # ─────────────────────────────────────────────────────────────────
+
+                        # Step 10: TP/SL 실제 주문
+                        try:
+                            create_take_profit(sym, side, tp_price, entry_price)  # quantity를 entry_price로 넘겨야 API 문법에 맞추세요
                         except Exception as e:
                             logging.error(f"{sym} TP 주문 실패: {e}")
                         try:
-                            create_stop_order(sym, side, sl_price, qty)
+                            create_stop_order(sym, side, sl_price, entry_price)
                         except Exception as e:
                             logging.error(f"{sym} SL 주문 실패: {e}")
 
-                        # Step 10: 포지션 저장 및 개수 로그
+                        # Step 11: 포지션 저장 및 개수 로그
+                        qty = calculate_qty(
+                            balance,
+                            entry_price,
+                            LEVERAGE,
+                            Decimal("0.3"),
+                            qty_precision,
+                            min_qty
+                        )
                         with positions_lock:
                             positions[sym] = {
                                 'side': primary_sig,
@@ -530,12 +517,11 @@ def analyze_market():
                             }
                         logging.info(f"✅ {sym} 포지션 저장 완료 → 메모리 상 현재 {len(positions)}개, 실제 {count_open_positions()}개")
 
-                        # Step 11: 터미널 로그 및 텔레그램 전송
+                        # Step 12: 터미널 로그 및 텔레그램 전송
                         logging.info(
                             f"{sym} ({direction_kr}/{sig1_count},{sig5_count},{aux_count}/"
                             f"{tp_pct * 100:.2f}%,{sl_pct * 100:.2f}%)"
                         )
-
                         try:
                             msg = (
                                 f"<b>🔹 ENTRY: {sym}</b>\n"
@@ -546,7 +532,6 @@ def analyze_market():
                             send_telegram(msg)
                         except Exception as e:
                             logging.error(f"{sym} ENTRY 텔레그램 전송 오류: {e}")
-
                         logging.info(
                             f"{sym} 진입 완료 → entry_price={entry_price:.4f}, TP={tp_price:.4f}, SL={sl_price:.4f}"
                         )
