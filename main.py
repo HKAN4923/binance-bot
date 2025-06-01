@@ -30,6 +30,7 @@ from binance_client import (
 # 전역 변수
 wins = 0
 losses = 0
+total_pnl = Decimal("0")  # 누적 실현 손익 (USDT)
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -140,6 +141,7 @@ def monitor_position(sym):
 
             # 포지션이 완전히 사라졌다면(청산됨)
             if amt == 0:
+                total_pnl += pnl_usdt
                 mark_price = Decimal(str(get_mark_price(sym)))
                 if primary_sig == 'long':
                     pnl_pct = (mark_price - entry_price) / entry_price
@@ -169,7 +171,7 @@ def monitor_position(sym):
                     f"<b>🔸 EXIT: {sym}</b>\n"
                     f"▶ 방향: {primary_sig.upper()}\n"
                     f"▶ 실현 손익: {pnl_usdt:.2f} USDT ({pnl_pct * 100:.2f}%)\n"
-                    f"▶ 누적 기록: {wins}승 {losses}패"
+                    f"▶ 누적 기록: {wins}승 {losses}패"/ 총손익: {total_pnl:.2f} USDT"
                 )
                 send_telegram(msg)
 
@@ -195,14 +197,18 @@ def monitor_position(sym):
                         float(remaining_amt),
                         reduceOnly=True
                     )
-                    send_telegram(
-                        f"<b>🔹 0.2% RE-TP: {sym}</b>\n"
-                        f"▶ 방향: {primary_sig.upper()}\n"
-                        f"▶ PnL: {pnl * 100:.2f}% → 잔량 {remaining_amt:.4f} 전량 매도"
-                    )
+                    
+            elif pnl <= Decimal("-0.005"):
+                create_market_order(
+                    sym,
+                    "SELL" if side == "long" else "BUY",
+                    float(remaining_amt),
+                    reduceOnly=True
+                    
                     with positions_lock:
                         positions.pop(sym, None)
                     break
+                )
 
             # 1) 손절 조건
             if pnl < -PIL_LOSS_THRESHOLD:
