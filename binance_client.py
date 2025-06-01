@@ -1,3 +1,4 @@
+# binance_client.py
 import os
 import math
 import time
@@ -12,16 +13,15 @@ API_SECRET = os.getenv("BINANCE_API_SECRET")
 client = Client(API_KEY, API_SECRET)
 
 def get_open_position_amt(symbol: str) -> float:
-    positions = client.futures_position_information(symbol=symbol)
-    for p in positions:
-        amt = float(p['positionAmt'])
-        if amt != 0:
-            return abs(amt)
-    return 0.0
-
-def get_all_symbols():
-    info = client.futures_exchange_info()
-    return [s["symbol"] for s in info["symbols"] if s["symbol"].endswith("USDT")]
+    try:
+        positions = client.futures_position_information(symbol=symbol)
+        for p in positions:
+            amt = float(p['positionAmt'])
+            if amt != 0:
+                return abs(amt)
+        return 0.0
+    except BinanceAPIException:
+        return 0.0
 
 def get_ohlcv(symbol, interval="5m", limit=100):
     try:
@@ -40,50 +40,69 @@ def get_ohlcv(symbol, interval="5m", limit=100):
         return None
 
 def change_leverage(symbol, lev):
-    client.futures_change_leverage(symbol=symbol, leverage=lev)
+    try:
+        client.futures_change_leverage(symbol=symbol, leverage=lev)
+    except Exception:
+        pass
 
 def get_balance():
-    bal = client.futures_account_balance()
-    return float(next(x for x in bal if x["asset"]=="USDT")["balance"])
+    try:
+        bal = client.futures_account_balance()
+        return float(next(x for x in bal if x["asset"]=="USDT")["balance"])
+    except Exception:
+        return 0.0
 
 def get_mark_price(symbol):
-    return float(client.futures_mark_price(symbol=symbol)["markPrice"])
+    try:
+        return float(client.futures_mark_price(symbol=symbol)["markPrice"])
+    except Exception:
+        return 0.0
 
 def get_precision(symbol):
     info = client.futures_exchange_info()["symbols"]
-    f = next(x for x in info if x["symbol"]==symbol)
+    f = next((x for x in info if x["symbol"]==symbol), None)
+    if not f:
+        return 8, 8, 0.0
     p_price = int(-math.log10(float(next(filt for filt in f["filters"] if filt["filterType"]=="PRICE_FILTER")["tickSize"])))
     p_qty   = int(-math.log10(float(next(filt for filt in f["filters"] if filt["filterType"]=="LOT_SIZE")["stepSize"])))
-    # LOT_SIZE 필터에서 stepSize 값을 최소 주문 수량(min_qty)으로 사용
     min_qty = float(next(filt for filt in f["filters"] if filt["filterType"]=="LOT_SIZE")["stepSize"])
     return p_price, p_qty, min_qty
 
 def create_market_order(symbol, side, qty, reduceOnly=False):
-    return client.futures_create_order(
-        symbol=symbol,
-        side=side,
-        type="MARKET",
-        quantity=qty,
-        reduceOnly=reduceOnly
-    )
+    try:
+        return client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type="MARKET",
+            quantity=qty,
+            reduceOnly=reduceOnly
+        )
+    except Exception:
+        return None
 
 def create_stop_order(symbol, side, sl_price, qty):
-    return client.futures_create_order(
-        symbol=symbol,
-        side=side,
-        type="STOP_MARKET",
-        stopPrice=sl_price,
-        closePosition=True
-    )
+    try:
+        return client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type="STOP_MARKET",
+            stopPrice=sl_price,
+            closePosition=True
+        )
+    except Exception:
+        return None
 
 def create_take_profit(symbol, side, tp_price, qty):
-    return client.futures_create_order(
-        symbol=symbol,
-        side=side,
-        type="TAKE_PROFIT_MARKET",
-        stopPrice=tp_price,
-        closePosition=True
-    )
+    try:
+        return client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type="TAKE_PROFIT_MARKET",
+            stopPrice=tp_price,
+            closePosition=True
+        )
+    except Exception:
+        return None
 
 def cancel_all_orders_for_symbol(symbol):
     try:
@@ -91,15 +110,18 @@ def cancel_all_orders_for_symbol(symbol):
         for order in orders:
             client.futures_cancel_order(symbol=symbol, orderId=order['orderId'])
         print(f"[{symbol}] 기존 주문 전부 취소 완료")
-    except BinanceAPIException as e:
-        print(f"[{symbol}] 주문 취소 실패: {e}")
+    except BinanceAPIException:
+        pass
 
 def create_limit_order(symbol: str, side: str, quantity: float, price: float):
-    return client.futures_create_order(
-        symbol=symbol,
-        side=side,
-        type="LIMIT",
-        timeInForce="GTC",
-        quantity=quantity,
-        price=price
-    )
+    try:
+        return client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type="LIMIT",
+            timeInForce="GTC",
+            quantity=quantity,
+            price=price
+        )
+    except Exception:
+        return None
