@@ -66,3 +66,8 @@ if not BINANCE_API_KEY or not BINANCE_API_SECRET:
     raise RuntimeError("BINANCE API 키 또는 시크릿이 설정되지 않았습니다.")
 if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise RuntimeError("텔레그램 토큰 또는 챗 ID가 설정되지 않았습니다.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 시장 분석 주기 (초)
+#   - 봇이 시장을 분석하고 진입 판단을 반복하는 주기
+ANALYSIS_INTERVAL_SEC = int(os.getenv("ANALYSIS_INTERVAL_SEC", 5))
