@@ -743,7 +743,8 @@ if __name__ == "__main__":
 
     try:
         while True:
-            time.sleep(60)
+            logging.info("⏳ 봇 정상 대기 중... (main loop idle)")
+            time.sleep(30)
     except Exception as e:
         logging.error(f"메인 루프 오류: {e}")
         sys.exit(1)
