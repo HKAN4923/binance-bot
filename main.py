@@ -121,7 +121,7 @@ def cleanup_orphan_orders():
             time.sleep(10)
 
 def monitor_position(sym):
-    global wins, losses
+    global wins, losses, total_pnl
     try:
         with positions_lock:
             pos_info = positions.get(sym)
@@ -129,52 +129,63 @@ def monitor_position(sym):
             return
         side = pos_info['side']
         entry_price = pos_info['entry_price']
-        quantity = pos_info['quantity']
+        initial_quantity = pos_info['quantity']
+        remaining_qty = initial_quantity
+        realized_usdt = Decimal("0")
         initial_count = pos_info['initial_match_count']
         primary_sig = pos_info['primary_sig']
         _, qty_precision, _ = get_precision(sym)
         quant = Decimal(f"1e-{qty_precision}")
 
-      # monitor_position 함수 중 수정된 부분
-
         while True:
             time.sleep(10)
             amt = get_open_position_amt(sym)
+            _, _, min_qty = get_precision(sym)
+            if amt < min_qty:
+                amt = 0
 
-            # 포지션이 완전히 사라졌다면(청산됨)
+            # 1) 포지션이 완전히 사라졌다면(청산됨)
             if amt == 0:
+                # 최종 청산 시 전체 PnL 계산
                 mark_price = Decimal(str(get_mark_price(sym)))
-                if primary_sig == 'long':
-                    pnl_pct = (mark_price - entry_price) / entry_price
-                    pnl_usdt = (mark_price - entry_price) * quantity
-                else:
-                    pnl_pct = (entry_price - mark_price) / entry_price
-                    pnl_usdt = (entry_price - mark_price) * quantity
-
-                total_pnl += pnl_usdt  # 누적 손익 반영
-
-                # 누적 승/패 업데이트
-                if pnl_pct > 0:
+                if remaining_qty > 0:
+                    # 남은 잔량이 시장가 청산 되었으므로 PnL 계산
+                    if primary_sig == 'long':
+                        final_pnl_usdt = (mark_price - entry_price) * remaining_qty
+                    else:
+                        final_pnl_usdt = (entry_price - mark_price) * remaining_qty
+                    realized_usdt += final_pnl_usdt
+                    remaining_qty = Decimal("0")
+                # 누적 손익 업데이트
+                total_pnl += realized_usdt
+                # 승패 판단: 전체 실현 PnL 기준
+                if realized_usdt > 0:
                     wins += 1
+                    result = "WIN"
                 else:
                     losses += 1
+                    result = "LOSS"
+                total_trades = wins + losses
+                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
 
-                # trade_log에 기록
+                # trade_log에 기록 (최종 청산 시 기록)
                 with trade_log_lock:
                     trade_log.append({
                         'timestamp': time.time(),
                         'symbol': sym,
                         'side': primary_sig,
-                        'pnl_pct': float(pnl_pct),
-                        'pnl_usdt': float(pnl_usdt)
+                        'pnl_pct': float((realized_usdt / (entry_price * initial_quantity)) * 100),
+                        'pnl_usdt': float(realized_usdt)
                     })
 
                 # Telegram 청산 알림
                 msg = (
-                    f"<b>\ud83d\udd38 EXIT: {sym}</b>\n"
-                    f"\u25b6 \ubc29\ud5a5: {primary_sig.upper()}\n"
-                    f"\u25b6 \uc2e4\ud604 \uc190\uc775: {pnl_usdt:.2f} USDT ({pnl_pct * 100:.2f}%)\n"
-                    f"\u25b6 \ub204\uc801 \uae30\ub85d: {wins}\uc2b9 {losses}\ud328 / \uccb4\uacc4 \uc190\uc775: {total_pnl:.2f} USDT"
+                    f"<b>🔸 EXIT: {sym}</b>\n"
+                    f"▶ 방향: {primary_sig.upper()}\n"
+                    f"▶ 청산 이유: FULL CLOSE\n"
+                    f"▶ 실현 손익: {realized_usdt:.2f} USDT\n"
+                    f"▶ 결과: {result}\n"
+                    f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate:.2f}%)"
                 )
                 send_telegram(msg)
 
@@ -183,81 +194,87 @@ def monitor_position(sym):
                     positions.pop(sym, None)
                 break
 
-            # 포지션 남아 있는 경우 PnL 계산
+            # 2) PnL 계산
             mark_price = Decimal(str(get_mark_price(sym)))
             if primary_sig == 'long':
                 pnl = (mark_price - entry_price) / entry_price
             else:
                 pnl = (entry_price - mark_price) / entry_price
 
-            # PnL 0.2% 익절 / -0.5% 손절 자동 청산
-            remaining_amt = get_open_position_amt(sym)
+            # 3) 자동 익절/손절 (잔량 전량 청산)
+            remaining_amt = amt
             if remaining_amt > 0:
+                # 자동 익절: +0.2%일 때 남은 잔량 전량 청산
                 if pnl >= Decimal("0.002"):
+                    if primary_sig == 'long':
+                        pnl_usdt_partial = (mark_price - entry_price) * remaining_amt
+                    else:
+                        pnl_usdt_partial = (entry_price - mark_price) * remaining_amt
+                    realized_usdt += pnl_usdt_partial
                     create_market_order(
                         sym,
                         "SELL" if side == "long" else "BUY",
                         float(remaining_amt),
                         reduceOnly=True
                     )
+                    total_pnl += realized_usdt
+                    if realized_usdt > 0:
+                        wins += 1
+                        result = "WIN"
+                    else:
+                        losses += 1
+                        result = "LOSS"
+                    total_trades = wins + losses
+                    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+
                     send_telegram(
-                        f"<b>\ud83d\udd39 AUTO-TP: {sym}</b>\n"
-                        f"\u25b6 \ubc29\ud5a5: {primary_sig.upper()}\n"
-                        f"\u25b6 PnL: {pnl * 100:.2f}% \u2192 \uc794\ub8cc {remaining_amt:.4f} \uc804\ub7b5 \uc775\uc808"
+                        f"<b>🔹 EXIT: {sym}</b>\n"
+                        f"▶ 방향: {primary_sig.upper()}\n"
+                        f"▶ 청산 이유: AUTO-TP\n"
+                        f"▶ 실현 손익: {realized_usdt:.2f} USDT\n"
+                        f"▶ 결과: {result}\n"
+                        f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate:.2f}%)"
                     )
                     with positions_lock:
                         positions.pop(sym, None)
                     break
 
+                # 자동 손절: -0.5%일 때 남은 잔량 전량 청산
                 elif pnl <= Decimal("-0.005"):
+                    if primary_sig == 'long':
+                        pnl_usdt_partial = (mark_price - entry_price) * remaining_amt
+                    else:
+                        pnl_usdt_partial = (entry_price - mark_price) * remaining_amt
+                    realized_usdt += pnl_usdt_partial
                     create_market_order(
                         sym,
                         "SELL" if side == "long" else "BUY",
                         float(remaining_amt),
                         reduceOnly=True
                     )
+                    total_pnl += realized_usdt
+                    if realized_usdt > 0:
+                        wins += 1
+                        result = "WIN"
+                    else:
+                        losses += 1
+                        result = "LOSS"
+                    total_trades = wins + losses
+                    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+
                     send_telegram(
-                        f"<b>\ud83d\udd3b AUTO-SL: {sym}</b>\n"
-                        f"\u25b6 \ubc29\ud5a5: {primary_sig.upper()}\n"
-                        f"\u25b6 PnL: {pnl * 100:.2f}% \u2192 \uc794\ub8cc {remaining_amt:.4f} \uc804\ub7b5 \uc190\uc808"
+                        f"<b>🔻 EXIT: {sym}</b>\n"
+                        f"▶ 방향: {primary_sig.upper()}\n"
+                        f"▶ 청산 이유: AUTO-SL\n"
+                        f"▶ 실현 손익: {realized_usdt:.2f} USDT\n"
+                        f"▶ 결과: {result}\n"
+                        f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate:.2f}%)"
                     )
                     with positions_lock:
                         positions.pop(sym, None)
                     break
 
-            # 1) 손절 조건
-            if pnl < -PIL_LOSS_THRESHOLD:
-                df1 = get_ohlcv(sym, '1m', limit=50)
-                if df1 is not None and len(df1) >= 50:
-                    from strategy import check_reversal_multi
-                    if not check_reversal_multi(df1, threshold=2):
-                        create_market_order(
-                            sym,
-                            "SELL" if side == "long" else "BUY",
-                            float(quantity),
-                            reduceOnly=True
-                        )
-                        with positions_lock:
-                            positions.pop(sym, None)
-                        break
-
-            # 2) 익절 조건
-            if pnl > PIL_PROFIT_THRESHOLD:
-                df1 = get_ohlcv(sym, '1m', limit=50)
-                if df1 is not None and len(df1) >= 50:
-                    from strategy import check_reversal_multi
-                    if check_reversal_multi(df1, threshold=2):
-                        create_market_order(
-                            sym,
-                            "SELL" if side == "long" else "BUY",
-                            float(quantity),
-                            reduceOnly=True
-                        )
-                        with positions_lock:
-                            positions.pop(sym, None)
-                        break
-
-            # 3) 부분 익절/잔량 청산
+            # 4) 부분 익절: 지표가 하나 줄고, PnL > 0일 때만
             df1 = get_ohlcv(sym, '1m', limit=50)
             df5 = get_ohlcv(sym, '5m', limit=50)
             if df1 is None or df5 is None:
@@ -265,43 +282,81 @@ def monitor_position(sym):
             sig1_l, sig1_s = count_entry_signals(df1)
             sig5_l, sig5_s = count_entry_signals(df5)
             current_count = max(sig1_l, sig1_s) + max(sig5_l, sig5_s)
+            actual_amt = amt
 
-            if current_count < initial_count:
-                actual_amt = get_open_position_amt(sym)
-                _, _, min_qty = get_precision(sym)
-
-                # 50% 익절
-                if current_count == initial_count - 1:
-                    take_amt = (Decimal(str(actual_amt)) * Decimal("0.5")).quantize(quant, rounding=ROUND_DOWN)
-                    if take_amt > 0:
-                        create_market_order(
-                            sym,
-                            "SELL" if side == "long" else "BUY",
-                            float(take_amt),
-                            reduceOnly=True
-                        )
-                # 90% 익절
-                elif current_count <= initial_count - 2:
-                    take_amt = (Decimal(str(actual_amt)) * Decimal("0.9")).quantize(quant, rounding=ROUND_DOWN)
-                    if take_amt > 0:
-                        create_market_order(
-                            sym,
-                            "SELL" if side == "long" else "BUY",
-                            float(take_amt),
-                            reduceOnly=True
-                        )
-
-                # 남은 잔량이 최소수량 미만이면 전량 시장가 청산
-                remaining_amt = get_open_position_amt(sym)
-                if 0 < remaining_amt < min_qty:
+            if current_count == initial_count - 1 and pnl > 0:
+                take_amt = (Decimal(str(actual_amt)) * Decimal("0.5")).quantize(quant, rounding=ROUND_DOWN)
+                if take_amt > 0:
+                    # 부분 익절 시 실현 손익 계산
+                    if primary_sig == 'long':
+                        pnl_usdt_partial = (mark_price - entry_price) * take_amt
+                    else:
+                        pnl_usdt_partial = (entry_price - mark_price) * take_amt
+                    realized_usdt += pnl_usdt_partial
+                    remaining_qty -= take_amt
                     create_market_order(
                         sym,
                         "SELL" if side == "long" else "BUY",
-                        float(remaining_amt),
+                        float(take_amt),
+                        reduceOnly=True
+                    )
+            elif current_count <= initial_count - 2 and pnl > 0:
+                take_amt = (Decimal(str(actual_amt)) * Decimal("0.5")).quantize(quant, rounding=ROUND_DOWN)
+                if take_amt > 0:
+                    if primary_sig == 'long':
+                        pnl_usdt_partial = (mark_price - entry_price) * take_amt
+                    else:
+                        pnl_usdt_partial = (entry_price - mark_price) * take_amt
+                    realized_usdt += pnl_usdt_partial
+                    remaining_qty -= take_amt
+                    create_market_order(
+                        sym,
+                        "SELL" if side == "long" else "BUY",
+                        float(take_amt),
                         reduceOnly=True
                     )
 
+            # 5) 잔량이 최소수량 미만일 때 최종 청산 + EXIT
+            remaining_amt = get_open_position_amt(sym)
+            if 0 < remaining_amt < min_qty:
+                create_market_order(
+                    sym,
+                    "SELL" if side == "long" else "BUY",
+                    float(remaining_amt),
+                    reduceOnly=True
+                )
+                # 최종 잔량 청산 시점의 PnL 계산
+                mark_price2 = Decimal(str(get_mark_price(sym)))
+                if primary_sig == 'long':
+                    final_pnl_usdt = (mark_price2 - entry_price) * remaining_amt
+                else:
+                    final_pnl_usdt = (entry_price - mark_price2) * remaining_amt
+                realized_usdt += final_pnl_usdt
+                remaining_qty = Decimal("0")
+                total_pnl += realized_usdt
+                if realized_usdt > 0:
+                    wins += 1
+                    result = "WIN"
+                else:
+                    losses += 1
+                    result = "LOSS"
+                total_trades = wins + losses
+                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+
+                send_telegram(
+                    f"<b>🔸 EXIT: {sym}</b>\n"
+                    f"▶ 방향: {primary_sig.upper()}\n"
+                    f"▶ 청산 이유: FINAL CLOSE\n"
+                    f"▶ 실현 손익: {realized_usdt:.2f} USDT\n"
+                    f"▶ 결과: {result}\n"
+                    f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate:.2f}%)"
+                )
+                with positions_lock:
+                    positions.pop(sym, None)
+                break
+
             time.sleep(0.1)
+
     except Exception as e:
         logging.error(f"{sym} 모니터링 오류: {e}")
 
@@ -324,7 +379,6 @@ def analyze_market():
                 time.sleep(ANALYSIS_INTERVAL_SEC)
                 continue
 
-            # 배치 호출 최적화 (추후 비동기 개선 가능)
             for sym in tradable_symbols:
                 if count_open_positions() >= MAX_POSITIONS:
                     break
@@ -339,6 +393,7 @@ def analyze_market():
 
                 sig1 = check_entry_multi(df1, threshold=PRIMARY_THRESHOLD)
                 sig5 = check_entry_multi(df5, threshold=PRIMARY_THRESHOLD)
+
                 primary_sig = None
                 primary_tf = None
                 if sig1 and not sig5:
@@ -350,7 +405,6 @@ def analyze_market():
                 else:
                     continue
 
-                # 보조 지표
                 aux = []
                 df30 = get_ohlcv(sym, '30m', limit=EMA_LONG_LEN + 2)
                 if df30 is not None and len(df30) >= EMA_LONG_LEN:
@@ -374,7 +428,6 @@ def analyze_market():
                 if match_count < AUX_COUNT_THRESHOLD:
                     continue
 
-                # 진입 실행
                 balance = get_balance()
                 mark_price = get_mark_price(sym)
                 price_prec, qty_prec, min_qty = get_precision(sym)
@@ -386,7 +439,6 @@ def analyze_market():
                 if qty == 0:
                     continue
 
-                # 동적 LIMIT_ORDER_WAIT (ATR 기반 예시)
                 atr_series = calculate_atr(df1, length=14)
                 atr = atr_series.iloc[-1] if atr_series is not None and not np.isnan(atr_series.iloc[-1]) else None
                 if atr:
@@ -420,16 +472,11 @@ def analyze_market():
                 fills = order_info.get('fills')
                 entry_price = Decimal(str(fills[0]['price'])) if fills else Decimal(str(mark_price))
 
-                # TP/SL 설정 (SL 실패 시, TP_RATIO 기반 SL 재설정 → 여전히 실패하면 1% SL 고정)
                 if primary_sig == 'long':
                     tp = (entry_price * (Decimal("1") + TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
                     base_sl = (entry_price * (Decimal("1") - SL_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
                     sl = max(base_sl, entry_price - tick_size * 2)
-
-                    # TP 주문
                     tp_ord = create_take_profit(sym, 'SELL', float(tp), float(qty))
-
-                    # SL 주문 시도
                     sl_ord = create_stop_order(sym, 'SELL', float(sl), float(qty))
                     if not sl_ord:
                         logging.warning(f"{sym} - 기본 SL 주문 실패, TP_RATIO 기반 SL 재설정 중...")
@@ -441,16 +488,11 @@ def analyze_market():
                             sl_ord = create_stop_order(sym, 'SELL', float(fixed_sl), float(qty))
                             if not sl_ord:
                                 send_telegram(f"⚠️ {sym} SL 주문이 연속 실패했습니다. SL이 걸리지 않았습니다.")
-
                 else:
                     tp = (entry_price * (Decimal("1") - TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
                     base_sl = (entry_price * (Decimal("1") + SL_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
                     sl = min(base_sl, entry_price + tick_size * 2)
-
-                    # TP 주문
                     tp_ord = create_take_profit(sym, 'BUY', float(tp), float(qty))
-
-                    # SL 주문 시도
                     sl_ord = create_stop_order(sym, 'BUY', float(sl), float(qty))
                     if not sl_ord:
                         logging.warning(f"{sym} - 기본 SL 주문 실패, TP_RATIO 기반 SL 재설정 중...")
