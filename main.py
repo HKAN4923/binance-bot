@@ -104,7 +104,7 @@ def simulate_tp_sl_order(symbol, side, tp_price, sl_price):
     try:
         opposite_side_tp = "SELL" if side == "BUY" else "BUY"
         # TAKE_PROFIT_MARKET 테스트 주문
-        client.futures_create_order_test(
+        client.futures_create_test_order(
             symbol=symbol,
             side=opposite_side_tp,
             type="TAKE_PROFIT_MARKET",
@@ -114,7 +114,7 @@ def simulate_tp_sl_order(symbol, side, tp_price, sl_price):
             reduceOnly=True
         )
         # STOP_MARKET 테스트 주문
-        client.futures_create_order_test(
+        client.futures_create_test_order(
             symbol=symbol,
             side=opposite_side_tp,
             type="STOP_MARKET",

@@ -93,3 +93,4 @@ def cancel_all_orders_for_symbol(symbol):
         print(f"[{symbol}] 기존 주문 전부 취소 완료")
     except BinanceAPIException as e:
         print(f"[{symbol}] 주문 취소 실패: {e}")
+
