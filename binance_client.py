@@ -94,3 +94,12 @@ def cancel_all_orders_for_symbol(symbol):
     except BinanceAPIException as e:
         print(f"[{symbol}] 주문 취소 실패: {e}")
 
+def create_limit_order(symbol: str, side: str, quantity: float, price: float):
+    return client.futures_create_order(
+        symbol=symbol,
+        side=side,
+        type="LIMIT",
+        timeInForce="GTC",
+        quantity=quantity,
+        price=price
+    )

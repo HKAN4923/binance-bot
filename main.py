@@ -13,7 +13,13 @@ from config import (
     ANALYSIS_INTERVAL_SEC,
     LEVERAGE
 )
-from utils import to_kst, calculate_qty, get_top_100_volume_symbols, get_tradable_futures_symbols
+from utils import (
+    to_kst,
+    calculate_qty,
+    get_top_100_volume_symbols,
+    get_tradable_futures_symbols,
+    get_tick_size
+)
 from telegram_notifier import send_telegram
 from trade_summary import start_summary_scheduler
 from position_monitor import PositionMonitor
@@ -27,6 +33,7 @@ from binance_client import (
     create_market_order,
     create_stop_order,
     create_take_profit,
+    create_limit_order,
     cancel_all_orders_for_symbol,
     get_open_position_amt,
 )
@@ -57,11 +64,16 @@ SL_RATIO = Decimal("0.008")
 PIL_LOSS_THRESHOLD = Decimal("0.005")
 PIL_PROFIT_THRESHOLD = Decimal("0.005")
 
+# 리미트 주문 대기 시간 (초)
+LIMIT_ORDER_WAIT = 5
+
+# 추정 리미트 진입 편차 (0.2% favorable)
+LIMIT_OFFSET = Decimal("0.002")
 
 # ─────────────────────────────────────────────────────────────────────────────
 
 # 메모리 상 포지션 기록
-# 각 심볼별로 다음 정보를 저장:
+#각 심볼별로 다음 정보를 저장:
 # { 'side', 'quantity', 'entry_price', 'initial_match_count', 'primary_sig', 'start_time', 'tp_order_id', 'sl_order_id' }
 positions = {}
 positions_lock = threading.Lock()
@@ -580,41 +592,67 @@ def analyze_market():
                 if qty == 0 or qty < Decimal(str(min_qty)):
                     continue
 
-                # Step 2: 시장가 진입
-                entry_order = create_market_order(sym, side, float(qty))
-                if entry_order is None:
+                # Step 2: 리미트 진입 설정 (0.2% 유리한 가격)
+                quant_price = Decimal(f"1e-{price_precision}")
+                tick_size = get_tick_size(sym)
+                if side == "BUY":  # 롱
+                    limit_price_dec = (Decimal(str(mark_price)) * (Decimal("1") - LIMIT_OFFSET)).quantize(quant_price, ROUND_DOWN)
+                else:  # 숏
+                    limit_price_dec = (Decimal(str(mark_price)) * (Decimal("1") + LIMIT_OFFSET)).quantize(quant_price, ROUND_DOWN)
+
+                limit_price = float(limit_price_dec)
+                try:
+                    entry_order = create_limit_order(
+                        sym,
+                        side,
+                        float(qty),
+                        limit_price
+                    )
+                except Exception as e:
+                    logging.error(f"{sym} 리미트 주문 오류: {e}")
                     continue
 
-                def get_entry_price(order, fallback_price):
-                    try:
-                        if 'fills' in order and order['fills']:
-                            return Decimal(str(order['fills'][0]['price']))
-                        elif 'avgFillPrice' in order:
-                            return Decimal(str(order['avgFillPrice']))
-                        else:
-                            return Decimal(str(fallback_price))
-                    except Exception:
-                        return Decimal(str(fallback_price))
+                order_id = entry_order.get('orderId')
+                # Step 3: LIMIT_ORDER_WAIT초 대기
+                time.sleep(LIMIT_ORDER_WAIT)
+                try:
+                    order_info = client.futures_get_order(symbol=sym, orderId=order_id)
+                except Exception as e:
+                    logging.error(f"{sym} 주문 조회 오류: {e}")
+                    cancel_all_orders_for_symbol(sym)
+                    continue
 
-                entry_price = get_entry_price(entry_order, mark_price)
+                if order_info.get('status') != 'FILLED':
+                    # 체결 안 됐으면 주문 취소 후 다음 심볼로
+                    cancel_all_orders_for_symbol(sym)
+                    logging.info(f"{sym} 리미트 미체결 → 주문 취소, 진입 취소")
+                    continue
 
-                # Step 3: TP/SL 설정
-                quant_price = Decimal(f"1e-{price_precision}")
+                # 체결된 경우 entry_price 확정
+                fills = order_info.get('fills')
+                if fills:
+                    entry_price = Decimal(str(fills[0]['price']))
+                else:
+                    entry_price = Decimal(str(mark_price))
+
+                # Step 4: TP/SL 설정 (tick_size 보정 포함)
                 if primary_sig == "long":
                     tp_price = (entry_price * (Decimal("1") + TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
-                    sl_price = (entry_price * (Decimal("1") - SL_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
+                    base_sl = (entry_price * (Decimal("1") - SL_RATIO)).quantize(quant_price, ROUND_DOWN)
+                    sl_price = max(base_sl, entry_price - tick_size * 2)
                     tp_order = create_take_profit(sym, "SELL", float(tp_price), float(qty))
                     sl_order = create_stop_order(sym, "SELL", float(sl_price), float(qty))
                 else:
                     tp_price = (entry_price * (Decimal("1") - TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
-                    sl_price = (entry_price * (Decimal("1") + SL_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
+                    base_sl = (entry_price * (Decimal("1") + SL_RATIO)).quantize(quant_price, ROUND_DOWN)
+                    sl_price = min(base_sl, entry_price + tick_size * 2)
                     tp_order = create_take_profit(sym, "BUY", float(tp_price), float(qty))
                     sl_order = create_stop_order(sym, "BUY", float(sl_price), float(qty))
 
                 tp_id = tp_order.get('orderId') if tp_order else None
                 sl_id = sl_order.get('orderId') if sl_order else None
 
-                # Step 4: 메모리 저장
+                # Step 5: 메모리 저장
                 with positions_lock:
                     positions[sym] = {
                         'side': primary_sig,
@@ -628,7 +666,7 @@ def analyze_market():
                     }
                 logging.info(f"✅ {sym} 포지션 저장 완료 → 메모리 상 현재 {len(positions)}개, 실제 {count_open_positions()}개")
 
-                # Step 5: 진입 알림
+                # Step 6: 진입 알림
                 logging.info(f"{sym} ({direction_kr}/{initial_count}) 진입 완료 → entry_price={entry_price:.4f}, TP={tp_price}, SL={sl_price}")
                 msg = (
                     f"<b>🔹 ENTRY: {sym}</b>\n"
@@ -640,7 +678,7 @@ def analyze_market():
                 )
                 send_telegram(msg)
 
-                # Step 6: 모니터 스레드 시작
+                # Step 7: 모니터 스레드 시작
                 threading.Thread(target=monitor_position, args=(sym,), daemon=True).start()
 
                 # 최대 포지션 도달하면 루프 중단

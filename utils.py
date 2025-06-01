@@ -66,3 +66,11 @@ def get_tradable_futures_symbols():
     except Exception as e:
         logging.error(f"get_tradable_futures_symbols 오류: {e}")
         return []
+def get_tick_size(symbol: str) -> Decimal:
+    info = client.futures_exchange_info()
+    for s in info['symbols']:
+        if s['symbol'] == symbol:
+            for f in s['filters']:
+                if f['filterType'] == 'PRICE_FILTER':
+                    return Decimal(str(f['tickSize']))
+    return Decimal("0.01")
