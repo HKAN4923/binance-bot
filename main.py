@@ -10,7 +10,8 @@ from config import (
     PRIMARY_THRESHOLD, AUX_COUNT_THRESHOLD,
     EMA_SHORT_LEN, EMA_LONG_LEN, VOLUME_SPIKE_MULTIPLIER,
     TP_RATIO, SL_RATIO, PIL_LOSS_THRESHOLD, PIL_PROFIT_THRESHOLD,
-    LIMIT_ORDER_WAIT_BASE, LIMIT_OFFSET
+    LIMIT_ORDER_WAIT_BASE, LIMIT_OFFSET,
+    MAX_TRADE_DURATION
 )
 from utils import (
     to_kst, calculate_qty, get_top_100_volume_symbols,
@@ -129,12 +130,15 @@ def monitor_position(sym):
             return
         side = pos_info['side']
         entry_price = pos_info['entry_price']
-        quantity = pos_info['quantity']
+        initial_quantity = pos_info['quantity']
         initial_count = pos_info['initial_match_count']
         primary_sig = pos_info['primary_sig']
         start_time = pos_info['start_time']
         _, qty_precision, _ = get_precision(sym)
         quant = Decimal(f"1e-{qty_precision}")
+
+        realized_usdt = Decimal("0")
+        remaining_qty = initial_quantity
 
         while True:
             time.sleep(10)
@@ -143,10 +147,53 @@ def monitor_position(sym):
             if amt < min_qty:
                 amt = 0
 
-            # 1) 전량 청산 상태 처리 (amt == 0) …
+            # 1) 전량 청산 상태 처리 (amt == 0)
             if amt == 0:
-                # (기존 EXIT 메시지 로직)
-                …
+                # 진입 이후 이미 잔량이 다 소진된 상태: 전체 실현 손익 계산
+                mark_price = Decimal(str(get_mark_price(sym)))
+                if remaining_qty > 0:
+                    if primary_sig == 'long':
+                        pnl_usdt_final = (mark_price - entry_price) * remaining_qty
+                    else:
+                        pnl_usdt_final = (entry_price - mark_price) * remaining_qty
+                    realized_usdt += pnl_usdt_final
+                    remaining_qty = Decimal("0")
+                total_pnl += realized_usdt
+
+                # 승패 판단
+                if realized_usdt > 0:
+                    wins += 1
+                    result = "WIN"
+                else:
+                    losses += 1
+                    result = "LOSS"
+                total_trades = wins + losses
+                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+
+                # trade_log 기록
+                with trade_log_lock:
+                    trade_log.append({
+                        'timestamp': time.time(),
+                        'symbol': sym,
+                        'side': primary_sig,
+                        'pnl_pct': float((realized_usdt / (entry_price * initial_quantity)) * 100),
+                        'pnl_usdt': float(realized_usdt)
+                    })
+
+                # EXIT 알림
+                msg = (
+                    f"<b>🔸 EXIT: {sym}</b>\n"
+                    f"▶ 방향: {primary_sig.upper()}\n"
+                    f"▶ 청산 이유: FULL CLOSE\n"
+                    f"▶ 실현 손익: {realized_usdt:.2f} USDT\n"
+                    f"▶ 결과: {result}\n"
+                    f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate:.2f}%)"
+                )
+                send_telegram(msg)
+
+                with positions_lock:
+                    positions.pop(sym, None)
+                break
 
             # 2) PnL 계산
             mark_price = Decimal(str(get_mark_price(sym)))
@@ -155,7 +202,7 @@ def monitor_position(sym):
             else:
                 pnl = (entry_price - mark_price) / entry_price
 
-            # ─── 30분 경과 후 신호 없으면 즉시 청산 ───
+            # 3) 30분 경과 후 신호 없으면 즉시 청산
             elapsed = time.time() - start_time
             if elapsed >= 30 * 60 and elapsed < MAX_TRADE_DURATION:
                 df1_tmp = get_ohlcv(sym, '1m', limit=50)
@@ -166,7 +213,6 @@ def monitor_position(sym):
                     sig5_l2, sig5_s2 = count_entry_signals(df5_tmp)
                     total_signals = sig1_l2 + sig1_s2 + sig5_l2 + sig5_s2
                     if total_signals == 0:
-                        # 즉시 전량 청산
                         remaining_amt2 = get_open_position_amt(sym)
                         if remaining_amt2 > 0:
                             create_market_order(
@@ -180,8 +226,10 @@ def monitor_position(sym):
                                 pnl_usdt2 = (mark_price2 - entry_price) * remaining_amt2
                             else:
                                 pnl_usdt2 = (entry_price - mark_price2) * remaining_amt2
-                            total_pnl += pnl_usdt2
-                            if pnl_usdt2 > 0:
+                            realized_usdt += pnl_usdt2
+                            total_pnl += realized_usdt
+
+                            if realized_usdt > 0:
                                 wins += 1
                                 result2 = "WIN"
                             else:
@@ -194,7 +242,7 @@ def monitor_position(sym):
                                 f"<b>🔸 EXIT: {sym}</b>\n"
                                 f"▶ 방향: {primary_sig.upper()}\n"
                                 f"▶ 청산 이유: NO SIGNAL AFTER 30m\n"
-                                f"▶ 실현 손익: {pnl_usdt2:.2f} USDT\n"
+                                f"▶ 실현 손익: {realized_usdt:.2f} USDT\n"
                                 f"▶ 결과: {result2}\n"
                                 f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate2:.2f}%)"
                             )
@@ -202,17 +250,9 @@ def monitor_position(sym):
                                 positions.pop(sym, None)
                         break
 
-            # 2) PnL 계산
-            mark_price = Decimal(str(get_mark_price(sym)))
-            if primary_sig == 'long':
-                pnl = (mark_price - entry_price) / entry_price
-            else:
-                pnl = (entry_price - mark_price) / entry_price
-
-            # 3) 자동 익절/손절 (잔량 전량 청산)
+            # 4) 자동 익절/손절 (잔량 전량 청산)
             remaining_amt = amt
             if remaining_amt > 0:
-                # 자동 익절: +0.2%일 때 남은 잔량 전량 청산
                 if pnl >= Decimal("0.002"):
                     if primary_sig == 'long':
                         pnl_usdt_partial = (mark_price - entry_price) * remaining_amt
@@ -246,8 +286,6 @@ def monitor_position(sym):
                     with positions_lock:
                         positions.pop(sym, None)
                     break
-
-                # 자동 손절: -0.5%일 때 남은 잔량 전량 청산
                 elif pnl <= Decimal("-0.005"):
                     if primary_sig == 'long':
                         pnl_usdt_partial = (mark_price - entry_price) * remaining_amt
@@ -282,7 +320,7 @@ def monitor_position(sym):
                         positions.pop(sym, None)
                     break
 
-            # 4) 부분 익절: 지표가 하나 줄고, PnL > 0일 때만
+            # 5) 부분 익절: 신호 하나 줄고 PnL > 0일 때만
             df1 = get_ohlcv(sym, '1m', limit=50)
             df5 = get_ohlcv(sym, '5m', limit=50)
             if df1 is None or df5 is None:
@@ -290,12 +328,10 @@ def monitor_position(sym):
             sig1_l, sig1_s = count_entry_signals(df1)
             sig5_l, sig5_s = count_entry_signals(df5)
             current_count = max(sig1_l, sig1_s) + max(sig5_l, sig5_s)
-            actual_amt = amt
 
             if current_count == initial_count - 1 and pnl > 0:
-                take_amt = (Decimal(str(actual_amt)) * Decimal("0.5")).quantize(quant, rounding=ROUND_DOWN)
+                take_amt = (Decimal(str(remaining_amt)) * Decimal("0.5")).quantize(quant, rounding=ROUND_DOWN)
                 if take_amt > 0:
-                    # 부분 익절 시 실현 손익 계산
                     if primary_sig == 'long':
                         pnl_usdt_partial = (mark_price - entry_price) * take_amt
                     else:
@@ -309,7 +345,7 @@ def monitor_position(sym):
                         reduceOnly=True
                     )
             elif current_count <= initial_count - 2 and pnl > 0:
-                take_amt = (Decimal(str(actual_amt)) * Decimal("0.5")).quantize(quant, rounding=ROUND_DOWN)
+                take_amt = (Decimal(str(remaining_amt)) * Decimal("0.5")).quantize(quant, rounding=ROUND_DOWN)
                 if take_amt > 0:
                     if primary_sig == 'long':
                         pnl_usdt_partial = (mark_price - entry_price) * take_amt
@@ -324,7 +360,7 @@ def monitor_position(sym):
                         reduceOnly=True
                     )
 
-            # 5) 잔량이 최소수량 미만일 때 최종 청산 + EXIT
+            # 6) 잔량이 최소수량 미만일 때 최종 청산 + EXIT
             remaining_amt = get_open_position_amt(sym)
             if 0 < remaining_amt < min_qty:
                 create_market_order(
@@ -333,7 +369,6 @@ def monitor_position(sym):
                     float(remaining_amt),
                     reduceOnly=True
                 )
-                # 최종 잔량 청산 시점의 PnL 계산
                 mark_price2 = Decimal(str(get_mark_price(sym)))
                 if primary_sig == 'long':
                     final_pnl_usdt = (mark_price2 - entry_price) * remaining_amt
@@ -448,7 +483,7 @@ def analyze_market():
                     continue
 
                 atr_series = calculate_atr(df1, length=14)
-                atr = atr_series.iloc[-1] if atr_series is not None and not np.isnan(atr_series.iloc[-1]) else None
+                atr = atr_series.iloc[-1] if (atr_series is not None and not np.isnan(atr_series.iloc[-1])) else None
                 if atr:
                     dynamic_wait = max(2, min(10, int(atr * 100)))
                 else:
