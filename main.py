@@ -129,11 +129,10 @@ def monitor_position(sym):
             return
         side = pos_info['side']
         entry_price = pos_info['entry_price']
-        initial_quantity = pos_info['quantity']
-        remaining_qty = initial_quantity
-        realized_usdt = Decimal("0")
+        quantity = pos_info['quantity']
         initial_count = pos_info['initial_match_count']
         primary_sig = pos_info['primary_sig']
+        start_time = pos_info['start_time']
         _, qty_precision, _ = get_precision(sym)
         quant = Decimal(f"1e-{qty_precision}")
 
@@ -144,55 +143,64 @@ def monitor_position(sym):
             if amt < min_qty:
                 amt = 0
 
-            # 1) 포지션이 완전히 사라졌다면(청산됨)
+            # 1) 전량 청산 상태 처리 (amt == 0) …
             if amt == 0:
-                # 최종 청산 시 전체 PnL 계산
-                mark_price = Decimal(str(get_mark_price(sym)))
-                if remaining_qty > 0:
-                    # 남은 잔량이 시장가 청산 되었으므로 PnL 계산
-                    if primary_sig == 'long':
-                        final_pnl_usdt = (mark_price - entry_price) * remaining_qty
-                    else:
-                        final_pnl_usdt = (entry_price - mark_price) * remaining_qty
-                    realized_usdt += final_pnl_usdt
-                    remaining_qty = Decimal("0")
-                # 누적 손익 업데이트
-                total_pnl += realized_usdt
-                # 승패 판단: 전체 실현 PnL 기준
-                if realized_usdt > 0:
-                    wins += 1
-                    result = "WIN"
-                else:
-                    losses += 1
-                    result = "LOSS"
-                total_trades = wins + losses
-                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+                # (기존 EXIT 메시지 로직)
+                …
 
-                # trade_log에 기록 (최종 청산 시 기록)
-                with trade_log_lock:
-                    trade_log.append({
-                        'timestamp': time.time(),
-                        'symbol': sym,
-                        'side': primary_sig,
-                        'pnl_pct': float((realized_usdt / (entry_price * initial_quantity)) * 100),
-                        'pnl_usdt': float(realized_usdt)
-                    })
+            # 2) PnL 계산
+            mark_price = Decimal(str(get_mark_price(sym)))
+            if primary_sig == 'long':
+                pnl = (mark_price - entry_price) / entry_price
+            else:
+                pnl = (entry_price - mark_price) / entry_price
 
-                # Telegram 청산 알림
-                msg = (
-                    f"<b>🔸 EXIT: {sym}</b>\n"
-                    f"▶ 방향: {primary_sig.upper()}\n"
-                    f"▶ 청산 이유: FULL CLOSE\n"
-                    f"▶ 실현 손익: {realized_usdt:.2f} USDT\n"
-                    f"▶ 결과: {result}\n"
-                    f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate:.2f}%)"
-                )
-                send_telegram(msg)
+            # ─── 30분 경과 후 신호 없으면 즉시 청산 ───
+            elapsed = time.time() - start_time
+            if elapsed >= 30 * 60 and elapsed < MAX_TRADE_DURATION:
+                df1_tmp = get_ohlcv(sym, '1m', limit=50)
+                df5_tmp = get_ohlcv(sym, '5m', limit=50)
+                if (df1_tmp is not None and len(df1_tmp) >= 50
+                        and df5_tmp is not None and len(df5_tmp) >= 50):
+                    sig1_l2, sig1_s2 = count_entry_signals(df1_tmp)
+                    sig5_l2, sig5_s2 = count_entry_signals(df5_tmp)
+                    total_signals = sig1_l2 + sig1_s2 + sig5_l2 + sig5_s2
+                    if total_signals == 0:
+                        # 즉시 전량 청산
+                        remaining_amt2 = get_open_position_amt(sym)
+                        if remaining_amt2 > 0:
+                            create_market_order(
+                                sym,
+                                "SELL" if side == "long" else "BUY",
+                                float(remaining_amt2),
+                                reduceOnly=True
+                            )
+                            mark_price2 = Decimal(str(get_mark_price(sym)))
+                            if primary_sig == 'long':
+                                pnl_usdt2 = (mark_price2 - entry_price) * remaining_amt2
+                            else:
+                                pnl_usdt2 = (entry_price - mark_price2) * remaining_amt2
+                            total_pnl += pnl_usdt2
+                            if pnl_usdt2 > 0:
+                                wins += 1
+                                result2 = "WIN"
+                            else:
+                                losses += 1
+                                result2 = "LOSS"
+                            total_trades2 = wins + losses
+                            win_rate2 = (wins / total_trades2 * 100) if total_trades2 > 0 else 0
 
-                # 메모리에서 제거
-                with positions_lock:
-                    positions.pop(sym, None)
-                break
+                            send_telegram(
+                                f"<b>🔸 EXIT: {sym}</b>\n"
+                                f"▶ 방향: {primary_sig.upper()}\n"
+                                f"▶ 청산 이유: NO SIGNAL AFTER 30m\n"
+                                f"▶ 실현 손익: {pnl_usdt2:.2f} USDT\n"
+                                f"▶ 결과: {result2}\n"
+                                f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate2:.2f}%)"
+                            )
+                            with positions_lock:
+                                positions.pop(sym, None)
+                        break
 
             # 2) PnL 계산
             mark_price = Decimal(str(get_mark_price(sym)))
