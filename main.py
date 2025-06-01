@@ -111,7 +111,7 @@ def simulate_tp_sl_order(symbol, side, tp_price, sl_price):
             stopPrice=float(tp_price),
             closePosition=True,
             timeInForce="GTC",
-            reduceOnly=True
+            
         )
         # STOP_MARKET 테스트 주문
         client.futures_create_test_order(
@@ -121,7 +121,7 @@ def simulate_tp_sl_order(symbol, side, tp_price, sl_price):
             stopPrice=float(sl_price),
             closePosition=True,
             timeInForce="GTC",
-            reduceOnly=True
+            
         )
         return True
     except Exception as e:
