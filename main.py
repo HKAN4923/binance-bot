@@ -137,7 +137,44 @@ def monitor_position(sym):
         while True:
             time.sleep(10)
             amt = get_open_position_amt(sym)
+            # 포지션이 완전히 사라졌다면(청산됨)
             if amt == 0:
+                mark_price = Decimal(str(get_mark_price(sym)))
+                if primary_sig == 'long':
+                    pnl_pct = (mark_price - entry_price) / entry_price
+                    pnl_usdt = (mark_price - entry_price) * quantity
+                else:
+                    pnl_pct = (entry_price - mark_price) / entry_price
+                    pnl_usdt = (entry_price - mark_price) * quantity
+
+                # 누적 승/패 업데이트
+                if pnl_pct > 0:
+                    wins += 1
+                else:
+                    losses += 1
+
+                # trade_log에 기록
+                with trade_log_lock:
+                    trade_log.append({
+                        'timestamp': time.time(),
+                        'symbol': sym,
+                        'side': primary_sig,
+                        'pnl_pct': float(pnl_pct),
+                        'pnl_usdt': float(pnl_usdt)
+                    })
+
+                # Telegram 청산 알림
+                msg = (
+                    f"<b>🔸 EXIT: {sym}</b>\n"
+                    f"▶ 방향: {primary_sig.upper()}\n"
+                    f"▶ 실현 손익: {pnl_usdt:.2f} USDT ({pnl_pct * 100:.2f}%)\n"
+                    f"▶ 누적 기록: {wins}승 {losses}패"
+                )
+                send_telegram(msg)
+
+                # 메모리에서 제거
+                with positions_lock:
+                    positions.pop(sym, None)
                 break
 
             mark_price = Decimal(str(get_mark_price(sym)))
@@ -152,7 +189,7 @@ def monitor_position(sym):
                         create_market_order(sym, 'SELL' if side == 'long' else 'BUY', float(quantity), reduceOnly=True)
                         with positions_lock:
                             positions.pop(sym, None)
-                        msg = f"<b>🔸 STOP CLOSE: {sym}</b> ▶ PnL: {pnl*100:.2f}% ({wins}승 {losses}패)"
+                        msg = f"<b>🔸 STOP CLOSE: {sym}</b> ▶ PnL: {pnl * 100:.2f}% ({wins}승 {losses}패)"
                         send_telegram(msg)
                         break
 
@@ -165,11 +202,11 @@ def monitor_position(sym):
                         create_market_order(sym, 'SELL' if side == 'long' else 'BUY', float(quantity), reduceOnly=True)
                         with positions_lock:
                             positions.pop(sym, None)
-                        msg = f"<b>🔸 TAKE CLOSE: {sym}</b> ▶ PnL: {pnl*100:.2f}% ({wins}승 {losses}패)"
+                        msg = f"<b>🔸 TAKE CLOSE: {sym}</b> ▶ PnL: {pnl * 100:.2f}% ({wins}승 {losses}패)"
                         send_telegram(msg)
                         break
 
-            # 3) 부분 익절/청산 로직
+            # 3) 부분 익절/잔량 청산
             df1 = get_ohlcv(sym, '1m', limit=50)
             df5 = get_ohlcv(sym, '5m', limit=50)
             if df1 is None or df5 is None:
@@ -180,6 +217,8 @@ def monitor_position(sym):
 
             if current_count < initial_count:
                 actual_amt = get_open_position_amt(sym)
+                _, _, min_qty = get_precision(sym)
+
                 # 50% 익절
                 if current_count == initial_count - 1:
                     take_amt = (Decimal(str(actual_amt)) * Decimal("0.5")).quantize(quant, rounding=ROUND_DOWN)
@@ -190,6 +229,11 @@ def monitor_position(sym):
                     take_amt = (Decimal(str(actual_amt)) * Decimal("0.9")).quantize(quant, rounding=ROUND_DOWN)
                     if take_amt > 0:
                         create_market_order(sym, 'SELL' if side == 'long' else 'BUY', float(take_amt), reduceOnly=True)
+
+                # 남은 잔량이 최소수량 미만이면 전량 시장가 청산
+                remaining_amt = get_open_position_amt(sym)
+                if 0 < remaining_amt < min_qty:
+                    create_market_order(sym, 'SELL' if side == 'long' else 'BUY', float(remaining_amt), reduceOnly=True)
 
             time.sleep(0.1)
     except Exception as e:
@@ -299,7 +343,7 @@ def analyze_market():
 
                 try:
                     order_info = client.futures_get_order(symbol=sym, orderId=order_id)
-                except Exception as e:
+                except Exception:
                     cancel_all_orders_for_symbol(sym)
                     continue
 
@@ -310,19 +354,52 @@ def analyze_market():
                 fills = order_info.get('fills')
                 entry_price = Decimal(str(fills[0]['price'])) if fills else Decimal(str(mark_price))
 
-                # TP/SL 설정
+                # TP/SL 설정 (SL 실패 시, TP_RATIO 기반 SL 재설정 → 여전히 실패하면 1% SL 고정)
                 if primary_sig == 'long':
                     tp = (entry_price * (Decimal("1") + TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
                     base_sl = (entry_price * (Decimal("1") - SL_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
                     sl = max(base_sl, entry_price - tick_size * 2)
+
+                    # TP 주문
                     tp_ord = create_take_profit(sym, 'SELL', float(tp), float(qty))
+
+                    # SL 주문 시도
                     sl_ord = create_stop_order(sym, 'SELL', float(sl), float(qty))
+                    if not sl_ord:
+                        logging.warning(f"{sym} - 기본 SL 주문 실패, TP_RATIO 기반 SL 재설정 중...")
+                        # SL = entry_price * (1 - TP_RATIO)
+                        alt_sl = (entry_price * (Decimal("1") - TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
+                        sl_ord = create_stop_order(sym, 'SELL', float(alt_sl), float(qty))
+                        if not sl_ord:
+                            logging.warning(f"{sym} - TP_RATIO 기반 SL 주문도 실패, 1% SL 고정으로 재설정 중...")
+                            # SL = entry_price * 0.99
+                            fixed_sl = (entry_price * (Decimal("0.99"))).quantize(quant_price, rounding=ROUND_DOWN)
+                            sl_ord = create_stop_order(sym, 'SELL', float(fixed_sl), float(qty))
+                            if not sl_ord:
+                                send_telegram(f"⚠️ {sym} SL 주문이 연속 실패했습니다. SL이 걸리지 않았습니다.")
+
                 else:
                     tp = (entry_price * (Decimal("1") - TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
                     base_sl = (entry_price * (Decimal("1") + SL_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
                     sl = min(base_sl, entry_price + tick_size * 2)
+
+                    # TP 주문
                     tp_ord = create_take_profit(sym, 'BUY', float(tp), float(qty))
+
+                    # SL 주문 시도
                     sl_ord = create_stop_order(sym, 'BUY', float(sl), float(qty))
+                    if not sl_ord:
+                        logging.warning(f"{sym} - 기본 SL 주문 실패, TP_RATIO 기반 SL 재설정 중...")
+                        # SL = entry_price * (1 + TP_RATIO)
+                        alt_sl = (entry_price * (Decimal("1") + TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
+                        sl_ord = create_stop_order(sym, 'BUY', float(alt_sl), float(qty))
+                        if not sl_ord:
+                            logging.warning(f"{sym} - TP_RATIO 기반 SL 주문도 실패, 1% SL 고정으로 재설정 중...")
+                            # SL = entry_price * 1.01
+                            fixed_sl = (entry_price * (Decimal("1.01"))).quantize(quant_price, rounding=ROUND_DOWN)
+                            sl_ord = create_stop_order(sym, 'BUY', float(fixed_sl), float(qty))
+                            if not sl_ord:
+                                send_telegram(f"⚠️ {sym} SL 주문이 연속 실패했습니다. SL이 걸리지 않았습니다.")
 
                 tp_id = tp_ord.get('orderId') if tp_ord else None
                 sl_id = sl_ord.get('orderId') if sl_ord else None
@@ -339,11 +416,11 @@ def analyze_market():
                         'sl_order_id': sl_id
                     }
                 msg = (
-                    f"<b>🔹 ENTRY: {sym}</b>\\n"
-                    f"▶ 방향: {primary_sig.upper()}\\n"
-                    f"▶ 초기 신호: {initial_count}\\n"
-                    f"▶ 진입가: {entry_price:.4f}\\n"
-                    f"▶ TP: {tp}\\n"
+                    f"<b>🔹 ENTRY: {sym}</b>\n"
+                    f"▶ 방향: {primary_sig.upper()}\n"
+                    f"▶ 초기 신호: {initial_count}\n"
+                    f"▶ 진입가: {entry_price:.4f}\n"
+                    f"▶ TP: {tp}\n"
                     f"▶ SL: {sl}"
                 )
                 send_telegram(msg)
@@ -355,25 +432,6 @@ def analyze_market():
         except Exception as e:
             logging.error(f"Error in analyze_market: {e}")
             time.sleep(5)
-
-def close_callback(symbol, side, pnl_pct, pnl_usdt):
-    global wins, losses
-    if pnl_pct > 0:
-        wins += 1
-    else:
-        losses += 1
-    msg = (
-        f"<b>🔸 EXIT: {symbol}</b>\\n"
-        f"▶ 방향: {side.upper()}\\n"
-        f"▶ 손익: {pnl_usdt:.2f}USDT ({pnl_pct*100:.2f}%)\\n"
-        f"▶ 기록: {wins}승 {losses}패"
-    )
-    send_telegram(msg)
-    # TP/SL 즉시 취소 (보장되지 않으면 30초 후 전체 취소)
-    from threading import Timer
-    def cancel_tp_sl():
-        cancel_all_orders_for_symbol(symbol)
-    Timer(30, cancel_tp_sl).start()
 
 if __name__ == "__main__":
     try:
