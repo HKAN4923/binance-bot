@@ -103,25 +103,25 @@ def simulate_tp_sl_order(symbol, side, tp_price, sl_price):
     """
     try:
         opposite_side_tp = "SELL" if side == "BUY" else "BUY"
-        client.futures_create_order(
+        # TAKE_PROFIT_MARKET 테스트 주문
+        client.futures_create_order_test(
             symbol=symbol,
             side=opposite_side_tp,
             type="TAKE_PROFIT_MARKET",
             stopPrice=float(tp_price),
             closePosition=True,
             timeInForce="GTC",
-            reduceOnly=True,
-            test=True
+            reduceOnly=True
         )
-        client.futures_create_order(
+        # STOP_MARKET 테스트 주문
+        client.futures_create_order_test(
             symbol=symbol,
             side=opposite_side_tp,
             type="STOP_MARKET",
             stopPrice=float(sl_price),
             closePosition=True,
             timeInForce="GTC",
-            reduceOnly=True,
-            test=True
+            reduceOnly=True
         )
         return True
     except Exception as e:
@@ -430,8 +430,16 @@ def analyze_market():
 
                         # ── 진입 전 TP/SL 시뮬레이션 ──
                         entry_price_approx = Decimal(str(mark_price))
-                        tp_price_approx = (entry_price_approx * (1 + tp_pct)) if side == "BUY" else (entry_price_approx * (1 - tp_pct))
-                        sl_price_approx = (entry_price_approx * (1 - sl_pct)) if side == "BUY" else (entry_price_approx * (1 + sl_pct))
+                        tp_price_approx = (
+                            entry_price_approx * (1 + tp_pct)
+                        ) if side == "BUY" else (
+                            entry_price_approx * (1 - tp_pct)
+                        )
+                        sl_price_approx = (
+                            entry_price_approx * (1 - sl_pct)
+                        ) if side == "BUY" else (
+                            entry_price_approx * (1 + sl_pct)
+                        )
 
                         quant = Decimal(10) ** (-price_precision)
                         tp_price_approx = tp_price_approx.quantize(quant)
@@ -441,7 +449,9 @@ def analyze_market():
                         gap_sl = abs(entry_price_approx - sl_price_approx) / entry_price_approx
 
                         if gap_tp < MIN_TP or gap_sl < MIN_SL:
-                            logging.info(f"{sym} → 최소 TP/SL 거리 미달 (gap_tp={gap_tp:.4f}, gap_sl={gap_sl:.4f}) → 진입 스킵")
+                            logging.info(
+                                f"{sym} → 최소 TP/SL 거리 미달 (gap_tp={gap_tp:.4f}, gap_sl={gap_sl:.4f}) → 진입 스킵"
+                            )
                             continue
 
                         if not simulate_tp_sl_order(sym, side, tp_price_approx, sl_price_approx):
