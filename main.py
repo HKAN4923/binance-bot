@@ -65,10 +65,10 @@ PIL_LOSS_THRESHOLD = Decimal("0.005")
 PIL_PROFIT_THRESHOLD = Decimal("0.005")
 
 # 리미트 주문 대기 시간 (초)
-LIMIT_ORDER_WAIT = 5
+LIMIT_ORDER_WAIT = 6
 
 # 추정 리미트 진입 편차 (0.2% favorable)
-LIMIT_OFFSET = Decimal("0.002")
+LIMIT_OFFSET = Decimal("0.0015")
 
 # ─────────────────────────────────────────────────────────────────────────────
 
