@@ -2,6 +2,7 @@ from decimal import Decimal, ROUND_DOWN, getcontext
 import datetime
 import pytz
 
+
 def to_kst(ts: float):
     """
     UTC 타임스탬프를 KST (Asia/Seoul) datetime 객체로 변환
@@ -45,4 +46,23 @@ def get_top_100_volume_symbols():
         return [s["symbol"] for s in usdt_pairs[:100]]
     except Exception as e:
         logging.error(f"get_top_100_volume_symbols 오류: {e}")
+        return []
+
+# utils.py
+from binance_client import client
+import logging
+
+def get_tradable_futures_symbols():
+    """
+    Binance USDT 선물에서 거래 가능한 심볼 리스트를 반환합니다.
+    """
+    try:
+        exchange_info = client.futures_exchange_info()
+        symbols = [
+            s["symbol"] for s in exchange_info["symbols"]
+            if s["contractType"] == "PERPETUAL" and s["quoteAsset"] == "USDT" and s["status"] == "TRADING"
+        ]
+        return symbols
+    except Exception as e:
+        logging.error(f"get_tradable_futures_symbols 오류: {e}")
         return []

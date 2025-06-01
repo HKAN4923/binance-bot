@@ -16,7 +16,7 @@ from config import (
     MIN_SL,
     MIN_TP   # 👈 추가된 부분
 )
-from utils import to_kst, calculate_qty, get_top_100_volume_symbols
+from utils import to_kst, calculate_qty, get_top_100_volume_symbols, get_tradable_futures_symbols
 from telegram_notifier import send_telegram
 from trade_summary import start_summary_scheduler
 from position_monitor import PositionMonitor
@@ -32,7 +32,6 @@ from binance_client import (
     create_stop_order,
     cancel_all_orders_for_symbol,
     get_open_position_amt,
-    get_tradable_futures_symbols
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
