@@ -14,9 +14,9 @@ from config import (
     FIXED_PROFIT_TARGET,
     FIXED_LOSS_CAP_BASE,
     MIN_SL,
-    MIN_TP
+    MIN_TP   # 👈 추가된 부분
 )
-from utils import to_kst, calculate_qty, get_top_100_volume_symbols
+from utils import to_kst, calculate_qty
 from telegram_notifier import send_telegram
 from trade_summary import start_summary_scheduler
 from position_monitor import PositionMonitor
@@ -31,7 +31,9 @@ from binance_client import (
     create_take_profit,
     create_stop_order,
     cancel_all_orders_for_symbol,
-    get_open_position_amt
+    get_open_position_amt,
+    get_top_100_volume_symbols,
+    get_tradable_futures_symbols
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -54,8 +56,7 @@ VOLUME_SPIKE_MULTIPLIER = 2  # 거래량 스파이크 임계값
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-# 전역 변수: 메모리 상으로도 보유 중인 포지션을 기록하지만,
-# 실제 포지션 개수는 바이낸스에서 직접 조회하여 사용합니다.
+# 메모리 상 포지션 기록
 positions = {}
 positions_lock = threading.Lock()
 
@@ -79,7 +80,6 @@ def count_open_positions():
             if amt > 0:
                 cnt += 1
             else:
-                # 실제로 포지션이 없다면 메모리에서도 제거
                 with positions_lock:
                     positions.pop(sym, None)
         except Exception as e:
@@ -89,10 +89,11 @@ def count_open_positions():
 
 def compute_tp_sl(atr_pct: Decimal):
     """
-    ATR 기반 동적 TP/SL 계산
+    ATR 기반 동적 TP/SL 비율 계산
     """
     tp_pct_dyn = atr_pct * Decimal("1.8")
     sl_pct_dyn = atr_pct * Decimal("1.2")
+    # ── 수정된 부분: 최소 익절/손절 비율(MIN_TP, MIN_SL) 적용
     tp_pct = max(min(tp_pct_dyn, FIXED_PROFIT_TARGET), MIN_TP)
     sl_pct = max(min(sl_pct_dyn, FIXED_LOSS_CAP_BASE), MIN_SL)
     return tp_pct, sl_pct
@@ -385,6 +386,27 @@ def analyze_market():
                         side = "BUY" if primary_sig == "long" else "SELL"
                         direction_kr = "롱" if primary_sig == "long" else "숏"
 
+                        # ── **추가된 부분: 시장가 주문 전에 “예상 TP/SL 가격”을 계산하여 최소 거리(0.3%) 충족 여부 확인** ──
+                        # (이때 임시 진입가로 mark_price 사용)
+                        entry_price_approx = Decimal(str(mark_price))
+                        tp_price_approx = entry_price_approx * (1 + tp_pct) if side == "BUY" else entry_price_approx * (1 - tp_pct)
+                        sl_price_approx = entry_price_approx * (1 - sl_pct) if side == "BUY" else entry_price_approx * (1 + sl_pct)
+
+                        # price_precision에 맞춰 반올림
+                        quant = Decimal(10) ** (-price_precision)
+                        tp_price_approx = tp_price_approx.quantize(quant)
+                        sl_price_approx = sl_price_approx.quantize(quant)
+
+                        # 최소 거리 비율(0.3%) 적용: (함수 compute_tp_sl에서 이미 최소 비율 적용되었지만,
+                        #   시장가 진입가 기준으로 실제 주문 시 생길 수 있는 오차를 방지하기 위해 한 번 더 체크)
+                        gap_tp = abs(tp_price_approx - entry_price_approx) / entry_price_approx
+                        gap_sl = abs(entry_price_approx - sl_price_approx) / entry_price_approx
+
+                        if gap_tp < MIN_TP or gap_sl < MIN_SL:
+                            logging.info(f"{sym} -> 최소 TP/SL 거리 미달(gap_tp={gap_tp:.4f}, gap_sl={gap_sl:.4f}) → 진입 스킵")
+                            continue
+                        # ────────────────────────────────────────────────────────────────────────────
+
                         # Step 5: 수량 계산 (자금의 30% 사용)
                         qty = calculate_qty(
                             balance,
@@ -430,13 +452,11 @@ def analyze_market():
 
                         tp_price, sl_price = get_tp_sl_prices(entry_price, tp_pct, sl_pct, side)
 
-                        # ── **Precision 오류 수정**: price_precision에 맞춰 소수점 자릿수로 반올림
-                        quant = Decimal(10) ** (-price_precision)
+                        # price_precision에 맞춰 반올림
                         tp_price = tp_price.quantize(quant)
                         sl_price = sl_price.quantize(quant)
 
-                        # TP/SL 주문 생성 (개별 try/except로 감싸서
-                        # “Order would immediately trigger” 예외가 떠도 흐름이 멈추지 않도록 함)
+                        # TP/SL 주문 생성 (개별 예외 처리)
                         try:
                             create_take_profit(sym, side, tp_price, qty)
                         except Exception as e:
@@ -466,7 +486,6 @@ def analyze_market():
                             f"{tp_pct * 100:.2f}%,{sl_pct * 100:.2f}%)"
                         )
 
-                        # 텔레그램에도 제대로 보내기 위해 try/except 추가
                         try:
                             msg = (
                                 f"<b>🔹 ENTRY: {sym}</b>\n"

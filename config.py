@@ -14,7 +14,7 @@ MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", 3))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 고정 익절/손절 비율
-#   - FIXED_PROFIT_TARGET: 익절 목표 비율 (예: 0.025 → 2.5%)
+#   - FIXED_PROFIT_TARGET: 익절 목표 비율 (예: 0.05 → 2.5%)
 #   - FIXED_LOSS_CAP_BASE: 최대 손절 비율 (익절 목표 / 1.75로 계산)
 FIXED_PROFIT_TARGET = Decimal(os.getenv("FIXED_PROFIT_TARGET", "0.025"))
 FIXED_LOSS_CAP_BASE = FIXED_PROFIT_TARGET / Decimal("1.75")
