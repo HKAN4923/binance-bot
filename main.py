@@ -16,7 +16,7 @@ from utils import to_kst, calculate_qty, get_top_100_volume_symbols, get_tradabl
 from telegram_notifier import send_telegram
 from trade_summary import start_summary_scheduler
 from position_monitor import PositionMonitor
-from strategy import check_entry_multi, calculate_ema_cross
+from strategy import check_entry_multi, calculate_ema_cross, calculate_rsi
 from binance_client import (
     client,
     get_ohlcv,
@@ -48,9 +48,14 @@ EMA_SHORT_LEN = 20          # 30m EMA 단기
 EMA_LONG_LEN = 50           # 30m EMA 장기
 VOLUME_SPIKE_MULTIPLIER = 2  # 거래량 스파이크 임계값
 
-# TP/SL 고정 비율 (1.75% / 1%)
+# TP/SL 고정 비율 (TP: 1.75% / SL: 0.8%)
 TP_RATIO = Decimal("0.0175")
-SL_RATIO = Decimal("0.01")
+SL_RATIO = Decimal("0.008")
+
+# PnL 기준 (–0.5%, +0.5%)
+PIL_LOSS_THRESHOLD = Decimal("0.005")
+PIL_PROFIT_THRESHOLD = Decimal("0.005")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -248,9 +253,57 @@ def count_entry_signals(df: pd.DataFrame):
     return long_count, short_count
 
 
+def compute_rebound_signal(symbol: str) -> bool:
+    """
+    PnL < -0.5% 일 때, 반등 신호 감지 (RSI 기준).
+    1분봉 RSI < 30에서 > 30으로 전환되면 반등으로 간주.
+    """
+    df1 = get_ohlcv(symbol, '1m', limit=50)
+    if df1 is None or len(df1) < 50:
+        return False
+    calculate_rsi(df1)
+    last_rsi = df1['rsi'].iloc[-1]
+    prev_rsi = df1['rsi'].iloc[-2]
+    return prev_rsi < 30 and last_rsi > 30
+
+
+def compute_drop_signal(symbol: str) -> bool:
+    """
+    PnL > +0.5% 일 때, 하락 신호 감지 (RSI 기준).
+    1분봉 RSI > 70에서 < 70으로 전환되면 하락으로 간주.
+    """
+    df1 = get_ohlcv(symbol, '1m', limit=50)
+    if df1 is None or len(df1) < 50:
+        return False
+    calculate_rsi(df1)
+    last_rsi = df1['rsi'].iloc[-1]
+    prev_rsi = df1['rsi'].iloc[-2]
+    return prev_rsi > 70 and last_rsi < 70
+
+
+def cleanup_orphan_orders():
+    """
+    10초마다 실행: 열려있는 TP/SL 주문 중 positions에 없는 심볼의 주문 삭제.
+    """
+    while True:
+        try:
+            open_orders = client.futures_get_open_orders()
+            symbols_with_orders = set(o['symbol'] for o in open_orders)
+            with positions_lock:
+                tracked = set(positions.keys())
+            for sym in symbols_with_orders:
+                if sym not in tracked:
+                    cancel_all_orders_for_symbol(sym)
+                    logging.info(f"{sym} - positions에 없음 → 열린 주문 삭제")
+            time.sleep(10)
+        except Exception as e:
+            logging.error(f"cleanup_orphan_orders 오류: {e}")
+            time.sleep(10)
+
+
 def monitor_position(sym):
     """
-    진입 후 10초 간격으로 지표를 재확인하여 단계별 익절/청산 처리.
+    진입 후 10초 간격으로 지표를 재확인하여 단계별 익절/청산 및 PnL 기반 추가 로직 처리.
     1초마다 긴급 탈출 조건은 PositionMonitor가 담당.
     """
     with positions_lock:
@@ -260,17 +313,78 @@ def monitor_position(sym):
 
     side = pos_info['side']
     entry_price = pos_info['entry_price']
+    quantity = pos_info['quantity']
     initial_count = pos_info['initial_match_count']
     primary_sig = pos_info['primary_sig']
 
+    # 심볼의 quantity precision 조회
+    try:
+        _, qty_precision, _ = get_precision(sym)
+        quant = Decimal(f"1e-{qty_precision}")
+    except Exception as e:
+        logging.error(f"{sym} get_precision 오류(모니터링): {e}")
+        quant = None
+
     while True:
         time.sleep(10)  # 10초마다 확인
+
         # 이미 포지션이 닫혔으면 종료
         amt = get_open_position_amt(sym)
         if amt == 0:
             break
 
-        # 최신 1m/5m/30m 데이터로 지표 재계산
+        # 현재 PnL 계산 (entry_price와 mark_price 기반)
+        mark_price = Decimal(str(get_mark_price(sym)))
+        if primary_sig == "long":
+            pnl = (mark_price - entry_price) / entry_price
+        else:
+            pnl = (entry_price - mark_price) / entry_price
+
+        # 1) PnL < –0.5%: 반등 신호 없으면 전량 청산
+        if pnl < -PIL_LOSS_THRESHOLD:
+            if not compute_rebound_signal(sym):
+                try:
+                    create_market_order(sym, "SELL" if side == "BUY" else "BUY", float(quantity), reduceOnly=True)
+                    with positions_lock:
+                        positions.pop(sym, None)
+                    msg = (
+                        f"<b>🔸 STOP CLOSE (No Rebound): {sym}</b>\n"
+                        f"▶ 방향: {primary_sig.upper()}\n"
+                        f"▶ PnL: {pnl * 100:.2f}%\n"
+                        f"▶ 전체 기록: {wins}승 {losses}패"
+                    )
+                    send_telegram(msg)
+                except Exception as e:
+                    logging.error(f"{sym} No Rebound 전량 청산 실패: {e}")
+                break  # 모니터 종료
+            else:
+                continue  # 반등 감지 시 유지
+
+        # 2) PnL > +0.5%: 하락 신호 있으면 전량 청산
+        if pnl > PIL_PROFIT_THRESHOLD:
+            if compute_drop_signal(sym):
+                try:
+                    create_market_order(sym, "SELL" if side == "BUY" else "BUY", float(quantity), reduceOnly=True)
+                    with positions_lock:
+                        positions.pop(sym, None)
+                    msg = (
+                        f"<b>🔸 TAKE CLOSE (Drop Signal): {sym}</b>\n"
+                        f"▶ 방향: {primary_sig.upper()}\n"
+                        f"▶ PnL: {pnl * 100:.2f}%\n"
+                        f"▶ 전체 기록: {wins}승 {losses}패"
+                    )
+                    send_telegram(msg)
+                except Exception as e:
+                    logging.error(f"{sym} Drop Signal 전량 청산 실패: {e}")
+                break  # 모니터 종료
+            else:
+                # 하락 신호 없으면 유지
+                pass
+
+        # ────────────────────────────────────────────────────────────────────
+        # 기존 부분 익절/청산 로직 (수정된 부분)
+        # ────────────────────────────────────────────────────────────────────
+
         df1 = get_ohlcv(sym, '1m', limit=50)
         time.sleep(0.1)
         df5 = get_ohlcv(sym, '5m', limit=50)
@@ -278,34 +392,54 @@ def monitor_position(sym):
         if df1 is None or df5 is None:
             continue
 
-        # primary_sig와 동일한 방향의 신호 개수 재계산
         sig1_long, sig1_short = count_entry_signals(df1)
         sig5_long, sig5_short = count_entry_signals(df5)
         current_count = max(sig1_long, sig1_short) + max(sig5_long, sig5_short)
 
-        # 단계별 익절/청산 로직
         # 1) 신호 그대로 유지 → 아무 조치 없음
         if current_count == initial_count:
             continue
 
         # 2) 신호가 1만큼 줄었으면 50% 익절
         if current_count == initial_count - 1:
-            take_qty = pos_info['quantity'] * Decimal("0.5")
-            try:
-                create_market_order(sym, "SELL" if side == "BUY" else "BUY", take_qty, reduceOnly=True)
-                logging.info(f"{sym} 50% 익절 주문: {take_qty}")
-            except Exception as e:
-                logging.error(f"{sym} 50% 익절 실패: {e}")
+            if quant is not None:
+                raw_qty = quantity * Decimal("0.5")
+                take_qty = (raw_qty).quantize(quant, rounding=ROUND_DOWN)
+            else:
+                take_qty = quantity * Decimal("0.5")
+
+            # 현재 포지션 수량 확인 후 조정
+            actual_amt = get_open_position_amt(sym)
+            if take_qty > actual_amt:
+                take_qty = actual_amt
+
+            if take_qty > 0:
+                try:
+                    create_market_order(sym, "SELL" if side == "BUY" else "BUY", float(take_qty), reduceOnly=True)
+                    logging.info(f"{sym} 50% 익절 주문: {take_qty}")
+                except Exception as e:
+                    logging.error(f"{sym} 50% 익절 실패: {e}")
             continue
 
         # 3) 신호가 2 이상 줄었으면 90% 익절
         if current_count <= initial_count - 2:
-            take_qty = pos_info['quantity'] * Decimal("0.9")
-            try:
-                create_market_order(sym, "SELL" if side == "BUY" else "BUY", take_qty, reduceOnly=True)
-                logging.info(f"{sym} 90% 익절 주문: {take_qty}")
-            except Exception as e:
-                logging.error(f"{sym} 90% 익절 실패: {e}")
+            if quant is not None:
+                raw_qty = quantity * Decimal("0.9")
+                take_qty = (raw_qty).quantize(quant, rounding=ROUND_DOWN)
+            else:
+                take_qty = quantity * Decimal("0.9")
+
+            # 현재 포지션 수량 확인 후 조정
+            actual_amt = get_open_position_amt(sym)
+            if take_qty > actual_amt:
+                take_qty = actual_amt
+
+            if take_qty > 0:
+                try:
+                    create_market_order(sym, "SELL" if side == "BUY" else "BUY", float(take_qty), reduceOnly=True)
+                    logging.info(f"{sym} 90% 익절 주문: {take_qty}")
+                except Exception as e:
+                    logging.error(f"{sym} 90% 익절 실패: {e}")
             continue
 
         # 4) 신호 방향이 바뀌면 전량 청산
@@ -316,15 +450,25 @@ def monitor_position(sym):
             primary_now = "long"
         elif sig1_long and sig5_long and sig1_long == sig5_long:
             primary_now = "long" if sig1_long > sig1_short else "short"
+
         if primary_now and primary_now != primary_sig:
             try:
-                create_market_order(sym, "SELL" if side == "BUY" else "BUY", amt, reduceOnly=True)
-                logging.info(f"{sym} 신호 반전 전량 청산 주문: {amt}")
+                # 현재 포지션 수량 확인
+                actual_amt = get_open_position_amt(sym)
+                if actual_amt > 0:
+                    create_market_order(sym, "SELL" if side == "BUY" else "BUY", float(actual_amt), reduceOnly=True)
+                    logging.info(f"{sym} 신호 반전 전량 청산 주문: {actual_amt}")
+                    msg = (
+                        f"<b>🔸 SIGNAL REVERSE EXIT: {sym}</b>\n"
+                        f"▶ 방향: {primary_sig.upper()} → {primary_now.upper()}\n"
+                        f"▶ 전체 기록: {wins}승 {losses}패"
+                    )
+                    send_telegram(msg)
             except Exception as e:
                 logging.error(f"{sym} 신호 반전 청산 실패: {e}")
             break  # 모니터 종료
 
-        # 나머지는 유지, 다음 10초 대기
+        # 다음 10초 대기
 
 
 def analyze_market():
@@ -581,7 +725,7 @@ def close_callback(symbol, side, pnl_pct, pnl_usdt):
         msg = (
             f"<b>🔸 EXIT: {symbol}</b>\n"
             f"▶ 방향: {direction_kr}\n"
-            f"▶ PnL: {pnl_pct * 100:.2f}% ({pnl_usdt:.2f} USDT)\n"
+            f"▶ 실현 손익: {pnl_usdt:.2f} USDT ({pnl_pct * 100:.2f}%)\n"
             f"▶ 전체 기록: {wins}승 {losses}패"
         )
         send_telegram(msg)
@@ -605,6 +749,10 @@ if __name__ == "__main__":
     pos_monitor = PositionMonitor(positions, positions_lock, trade_log, trade_log_lock, close_callback)
     pos_monitor.start()
     logging.info("PositionMonitor 스레드 시작 완료")
+
+    # Cleanup orphan orders 스레드 시작
+    threading.Thread(target=cleanup_orphan_orders, daemon=True).start()
+    logging.info("Orphan orders cleanup 스레드 시작 완료")
 
     # Analyze Market 스레드 시작
     threading.Thread(target=analyze_market, daemon=True).start()
