@@ -21,10 +21,10 @@ EMA_LONG_LEN  = int(os.getenv("EMA_LONG_LEN", 50))   # 30m EMA 장기 기간 (�
 VOLUME_SPIKE_MULTIPLIER = float(os.getenv("VOLUME_SPIKE_MULTIPLIER", 2.0))
 
 # (4) 리미트 주문 대기 시간 기본값 (초 단위)
-LIMIT_ORDER_WAIT_BASE = int(os.getenv("LIMIT_ORDER_WAIT_BASE", 6))
+LIMIT_ORDER_WAIT_BASE = int(os.getenv("LIMIT_ORDER_WAIT_BASE", 7))
 
 # (5) 리미트 주문 진입 시 가격 오프셋
-LIMIT_OFFSET = Decimal(os.getenv("LIMIT_OFFSET", "0.0005"))  # 현재가 대비 0.02% 유리한 가격
+LIMIT_OFFSET = Decimal(os.getenv("LIMIT_OFFSET", "0.0002"))  # 현재가 대비 0.02% 유리한 가격
 
 # (6) TP/SL 비율
 TP_RATIO = Decimal(os.getenv("TP_RATIO", "0.0175"))  # 익절 목표 1.75%
