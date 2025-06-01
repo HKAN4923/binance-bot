@@ -50,7 +50,7 @@ logging.basicConfig(
 )
 
 # 진입 관련 상수
-PRIMARY_THRESHOLD = 3       # 1m/5m 지표 최소 일치 개수
+PRIMARY_THRESHOLD = 2       # 1m/5m 지표 최소 일치 개수
 AUX_COUNT_THRESHOLD = 2     # 보조지표 최소 일치 개수
 EMA_SHORT_LEN = 20          # 30m EMA 단기
 EMA_LONG_LEN = 50           # 30m EMA 장기
