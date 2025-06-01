@@ -4,14 +4,13 @@ import numpy as np
 import time
 import threading
 import logging
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 import pandas as pd
 
 from config import (
     MAX_POSITIONS,
     ANALYSIS_INTERVAL_SEC,
     LEVERAGE
-    # TP/SL 관련 변수들은 삭제되었습니다.
 )
 from utils import to_kst, calculate_qty, get_top_100_volume_symbols, get_tradable_futures_symbols
 from telegram_notifier import send_telegram
@@ -25,6 +24,8 @@ from binance_client import (
     get_mark_price,
     get_precision,
     create_market_order,
+    create_stop_order,
+    create_take_profit,
     cancel_all_orders_for_symbol,
     get_open_position_amt,
 )
@@ -47,11 +48,15 @@ EMA_SHORT_LEN = 20          # 30m EMA 단기
 EMA_LONG_LEN = 50           # 30m EMA 장기
 VOLUME_SPIKE_MULTIPLIER = 2  # 거래량 스파이크 임계값
 
+# TP/SL 고정 비율 (1.75% / 1%)
+TP_RATIO = Decimal("0.0175")
+SL_RATIO = Decimal("0.01")
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # 메모리 상 포지션 기록
 # 각 심볼별로 다음 정보를 저장:
-# { 'side', 'quantity', 'entry_price', 'initial_match_count', 'primary_sig' }
+# { 'side', 'quantity', 'entry_price', 'initial_match_count', 'primary_sig', 'start_time', 'tp_order_id', 'sl_order_id' }
 positions = {}
 positions_lock = threading.Lock()
 
@@ -291,7 +296,6 @@ def monitor_position(sym):
                 logging.info(f"{sym} 50% 익절 주문: {take_qty}")
             except Exception as e:
                 logging.error(f"{sym} 50% 익절 실패: {e}")
-            # 이후에도 남은 포지션 모니터링 지속
             continue
 
         # 3) 신호가 2 이상 줄었으면 90% 익절
@@ -302,11 +306,9 @@ def monitor_position(sym):
                 logging.info(f"{sym} 90% 익절 주문: {take_qty}")
             except Exception as e:
                 logging.error(f"{sym} 90% 익절 실패: {e}")
-            # 이후에도 남은 포지션 모니터링 지속
             continue
 
         # 4) 신호 방향이 바뀌면 전량 청산
-        # (새 primary signal 계산)
         primary_now = None
         if sig1_long and not sig5_long:
             primary_now = "long"
@@ -314,7 +316,6 @@ def monitor_position(sym):
             primary_now = "long"
         elif sig1_long and sig5_long and sig1_long == sig5_long:
             primary_now = "long" if sig1_long > sig1_short else "short"
-        # 위 로직이 좀 복잡하면, 간단히 이전 primary_sig와 다르면 역추세로 판단
         if primary_now and primary_now != primary_sig:
             try:
                 create_market_order(sym, "SELL" if side == "BUY" else "BUY", amt, reduceOnly=True)
@@ -349,15 +350,23 @@ def analyze_market():
                     tradable_symbols = get_tradable_futures_symbols()
                     logging.warning("get_top_100_volume_symbols() 실패 → 전체 tradable 심볼 사용")
 
-            # 실시간으로 바이낸스에서 포지션 개수 조회
-            current_positions = count_open_positions()
-            now = to_kst(time.time())
-            logging.info(
-                f"{now.strftime('%H:%M:%S')} 📊 분석중. (실제 포지션 {current_positions}/{MAX_POSITIONS})"
-            )
+            while True:
+                # 실시간으로 바이낸스에서 포지션 개수 조회
+                current_positions = count_open_positions()
+                now = to_kst(time.time())
+                logging.info(
+                    f"{now.strftime('%H:%M:%S')} 📊 분석중. (실제 포지션 {current_positions}/{MAX_POSITIONS})"
+                )
 
-            if current_positions < MAX_POSITIONS:
+                # 최대 포지션 수 초과 방지
+                if current_positions >= MAX_POSITIONS:
+                    break
+
                 for sym in tradable_symbols:
+                    # 진입 전 항상 real-time 포지션 개수 확인
+                    if count_open_positions() >= MAX_POSITIONS:
+                        break
+
                     # 메모리 상으로는 이미 기록된 심볼 건너뛰기
                     with positions_lock:
                         if sym in positions:
@@ -468,7 +477,7 @@ def analyze_market():
                             continue
 
                         # Step 6: 시장가 주문
-                        entry_order = create_market_order(sym, side, qty)
+                        entry_order = create_market_order(sym, side, float(qty))
                         if entry_order is None:
                             logging.warning(f"{sym} 진입 실패 → 주문 실패 또는 증거금 부족")
                             continue
@@ -487,31 +496,53 @@ def analyze_market():
 
                         entry_price = get_entry_price(entry_order, mark_price)
 
-                        # Step 8: 포지션 메모리 저장
+                        # Step 8: TP/SL 주문 생성
+                        # TP/SL 가격 계산 및 소수점 처리
+                        quant_price = Decimal('1e-{}'.format(price_precision))
+                        if primary_sig == "long":
+                            tp_price = (entry_price * (Decimal("1") + TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
+                            sl_price = (entry_price * (Decimal("1") - SL_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
+                            tp_order = create_take_profit(sym, "SELL", float(tp_price), float(qty))
+                            sl_order = create_stop_order(sym, "SELL", float(sl_price), float(qty))
+                        else:
+                            tp_price = (entry_price * (Decimal("1") - TP_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
+                            sl_price = (entry_price * (Decimal("1") + SL_RATIO)).quantize(quant_price, rounding=ROUND_DOWN)
+                            tp_order = create_take_profit(sym, "BUY", float(tp_price), float(qty))
+                            sl_order = create_stop_order(sym, "BUY", float(sl_price), float(qty))
+
+                        tp_id = tp_order.get('orderId') if tp_order else None
+                        sl_id = sl_order.get('orderId') if sl_order else None
+
+                        # Step 9: 포지션 메모리 저장
                         with positions_lock:
                             positions[sym] = {
                                 'side': primary_sig,
-                                'quantity': qty,
+                                'quantity': Decimal(str(qty)),
                                 'entry_price': entry_price,
                                 'initial_match_count': initial_count,
-                                'primary_sig': primary_sig
+                                'primary_sig': primary_sig,
+                                'start_time': time.time(),
+                                'tp_order_id': tp_id,
+                                'sl_order_id': sl_id
                             }
                         logging.info(f"✅ {sym} 포지션 저장 완료 → 메모리 상 현재 {len(positions)}개, 실제 {count_open_positions()}개")
 
-                        # Step 9: 진입 로그 및 텔레그램 전송
-                        logging.info(f"{sym} ({direction_kr}/{initial_count}) 진입 완료 → entry_price={entry_price:.4f}")
+                        # Step 10: 진입 로그 및 텔레그램 전송
+                        logging.info(f"{sym} ({direction_kr}/{initial_count}) 진입 완료 → entry_price={entry_price:.4f}, TP={tp_price}, SL={sl_price}")
                         try:
                             msg = (
                                 f"<b>🔹 ENTRY: {sym}</b>\n"
                                 f"▶ 방향: {primary_sig.upper()} (TF: {primary_tf})\n"
                                 f"▶ 초기 신호 개수: {initial_count}\n"
-                                f"▶ 진입가: {entry_price:.4f}"
+                                f"▶ 진입가: {entry_price:.4f}\n"
+                                f"▶ TP: {tp_price}\n"
+                                f"▶ SL: {sl_price}"
                             )
                             send_telegram(msg)
                         except Exception as e:
                             logging.error(f"{sym} ENTRY 텔레그램 전송 오류: {e}")
 
-                        # Step 10: 진입 후 10초마다 신호 감시 스레드 시작
+                        # Step 11: 진입 후 10초마다 신호 감시 스레드 시작
                         threading.Thread(target=monitor_position, args=(sym,), daemon=True).start()
 
                     except Exception as e:
@@ -521,8 +552,10 @@ def analyze_market():
                     # 포지션 개수가 제한치에 도달하면 루프 탈출
                     time.sleep(0.05)
                     if count_open_positions() >= MAX_POSITIONS:
-                        logging.info("MAX_POSITIONS 도달, 분석 루프 탈출")
+                        logging.info("MAX_POSITIONS 도달, 분석 심볼 루프 탈출")
                         break
+
+                break  # 한 번 분석 후 INTERVAL 기다리도록 루프 탈출
 
             time.sleep(ANALYSIS_INTERVAL_SEC)
 
