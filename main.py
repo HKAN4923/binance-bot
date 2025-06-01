@@ -135,13 +135,14 @@ def monitor_position(sym):
         _, qty_precision, _ = get_precision(sym)
         quant = Decimal(f"1e-{qty_precision}")
 
+      # monitor_position 함수 중 수정된 부분
+
         while True:
             time.sleep(10)
             amt = get_open_position_amt(sym)
 
             # 포지션이 완전히 사라졌다면(청산됨)
             if amt == 0:
-                total_pnl += pnl_usdt
                 mark_price = Decimal(str(get_mark_price(sym)))
                 if primary_sig == 'long':
                     pnl_pct = (mark_price - entry_price) / entry_price
@@ -149,6 +150,8 @@ def monitor_position(sym):
                 else:
                     pnl_pct = (entry_price - mark_price) / entry_price
                     pnl_usdt = (entry_price - mark_price) * quantity
+
+                total_pnl += pnl_usdt  # 누적 손익 반영
 
                 # 누적 승/패 업데이트
                 if pnl_pct > 0:
@@ -168,46 +171,59 @@ def monitor_position(sym):
 
                 # Telegram 청산 알림
                 msg = (
-                    f"<b>🔸 EXIT: {sym}</b>\n"
-                    f"▶ 방향: {primary_sig.upper()}\n"
-                    f"▶ 실현 손익: {pnl_usdt:.2f} USDT ({pnl_pct * 100:.2f}%)\n"
-                    f"▶ 누적 기록: {wins}승 {losses}패 / 총손익: {total_pnl:.2f} USDT"
-                send_telegram(msg)
+                    f"<b>\ud83d\udd38 EXIT: {sym}</b>\n"
+                    f"\u25b6 \ubc29\ud5a5: {primary_sig.upper()}\n"
+                    f"\u25b6 \uc2e4\ud604 \uc190\uc775: {pnl_usdt:.2f} USDT ({pnl_pct * 100:.2f}%)\n"
+                    f"\u25b6 \ub204\uc801 \uae30\ub85d: {wins}\uc2b9 {losses}\ud328 / \uccb4\uacc4 \uc190\uc775: {total_pnl:.2f} USDT"
                 )
+                send_telegram(msg)
+
                 # 메모리에서 제거
                 with positions_lock:
                     positions.pop(sym, None)
                 break
 
-            # 포지션이 남아 있는 경우 PnL 계산
+            # 포지션 남아 있는 경우 PnL 계산
             mark_price = Decimal(str(get_mark_price(sym)))
             if primary_sig == 'long':
                 pnl = (mark_price - entry_price) / entry_price
             else:
                 pnl = (entry_price - mark_price) / entry_price
 
-            # PnL 0.2% 도달 시 전량 매도
-            if pnl >= Decimal("0.002"):
-                remaining_amt = get_open_position_amt(sym)
-                if remaining_amt > 0:
+            # PnL 0.2% 익절 / -0.5% 손절 자동 청산
+            remaining_amt = get_open_position_amt(sym)
+            if remaining_amt > 0:
+                if pnl >= Decimal("0.002"):
                     create_market_order(
                         sym,
                         "SELL" if side == "long" else "BUY",
                         float(remaining_amt),
                         reduceOnly=True
                     )
-                    
-            elif pnl <= Decimal("-0.005"):
-                create_market_order(
-                    sym,
-                    "SELL" if side == "long" else "BUY",
-                    float(remaining_amt),
-                    reduceOnly=True
-                    
+                    send_telegram(
+                        f"<b>\ud83d\udd39 AUTO-TP: {sym}</b>\n"
+                        f"\u25b6 \ubc29\ud5a5: {primary_sig.upper()}\n"
+                        f"\u25b6 PnL: {pnl * 100:.2f}% \u2192 \uc794\ub8cc {remaining_amt:.4f} \uc804\ub7b5 \uc775\uc808"
+                    )
                     with positions_lock:
                         positions.pop(sym, None)
                     break
-                )
+
+                elif pnl <= Decimal("-0.005"):
+                    create_market_order(
+                        sym,
+                        "SELL" if side == "long" else "BUY",
+                        float(remaining_amt),
+                        reduceOnly=True
+                    )
+                    send_telegram(
+                        f"<b>\ud83d\udd3b AUTO-SL: {sym}</b>\n"
+                        f"\u25b6 \ubc29\ud5a5: {primary_sig.upper()}\n"
+                        f"\u25b6 PnL: {pnl * 100:.2f}% \u2192 \uc794\ub8cc {remaining_amt:.4f} \uc804\ub7b5 \uc190\uc808"
+                    )
+                    with positions_lock:
+                        positions.pop(sym, None)
+                    break
 
             # 1) 손절 조건
             if pnl < -PIL_LOSS_THRESHOLD:
