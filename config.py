@@ -1,12 +1,12 @@
-# config.py
 import os
 from decimal import Decimal
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # 1. 리미트 주문/지표 관련 파라미터
-PRIMARY_THRESHOLD = int(os.getenv("PRIMARY_THRESHOLD", 4))  # 3 → 4 (더 엄격)
-AUX_COUNT_THRESHOLD = int(os.getenv("AUX_COUNT_THRESHOLD", 3))  # 2 → 3
+PRIMARY_THRESHOLD = int(os.getenv("PRIMARY_THRESHOLD", 4))       # 3 → 4 (더 엄격)
+AUX_COUNT_THRESHOLD = int(os.getenv("AUX_COUNT_THRESHOLD", 3))   # 2 → 3
 
 # 2. 30분 EMA 계산 기간 (변경 없음)
 EMA_SHORT_LEN = int(os.getenv("EMA_SHORT_LEN", 20))

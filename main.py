@@ -1,4 +1,3 @@
-# main.py
 import sys
 import time
 import threading
@@ -563,7 +562,7 @@ def analyze_market():
                 if qty == 0:
                     continue
 
-                atr_series = calculate_atr(df1, length=14)
+                atr_series = calculate_atr(df1, period=14)
                 atr = atr_series.iloc[-1] if (atr_series is not None and not np.isnan(atr_series.iloc[-1])) else None
                 if atr:
                     dynamic_wait = max(2, min(10, int(atr * 100)))
