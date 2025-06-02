@@ -1,7 +1,5 @@
 import pandas as pd
-import numpy as np
 import logging
-from decimal import Decimal
 from config import EMA_SHORT_LEN, EMA_LONG_LEN
 from utils import (
     calculate_rsi, calculate_macd, calculate_ema_cross,
@@ -117,7 +115,7 @@ def check_reversal_multi(df: pd.DataFrame, threshold: int = 3):
             return True
         # 반대로 주로 short였다가 long_count가 threshold 이상이면 반전(매수) 신호로 본다
         if long_count >= threshold and short_count == 0:
-            return False  # 매수 반전은 여기선 False로 리턴(필요 시 True로 수정)
+            return False  # 필요하면 True로 변경 가능
         return False
     except Exception as e:
         logging.error(f"check_reversal_multi 오류: {e}")
