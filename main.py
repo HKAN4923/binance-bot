@@ -10,7 +10,7 @@ from config import (
     PRIMARY_THRESHOLD, AUX_COUNT_THRESHOLD,
     EMA_SHORT_LEN, EMA_LONG_LEN, VOLUME_SPIKE_MULTIPLIER,
     TP_RATIO, SL_RATIO, PIL_LOSS_THRESHOLD, PIL_PROFIT_THRESHOLD,
-    LIMIT_ORDER_WAIT_BASE, LIMIT_OFFSET,
+    LIMIT_ORDER_WAIT_BASE, LIMIT_OFFSET, PARTIAL_EXIT_RATIO,
     MAX_TRADE_DURATION
 )
 from utils import (
@@ -22,7 +22,7 @@ from trade_summary import start_summary_scheduler
 from position_monitor import PositionMonitor
 from strategy import check_entry_multi, count_entry_signals, calculate_atr
 from binance_client import (
-    client, get_ohlcv, get_balance, get_mark_price,
+    get_ohlcv, get_balance, get_mark_price,
     get_precision, create_market_order, create_stop_order,
     create_take_profit, create_limit_order, cancel_all_orders_for_symbol,
     get_open_position_amt
@@ -55,7 +55,8 @@ def count_open_positions():
                 cnt += 1
             else:
                 with positions_lock:
-                    positions.pop(sym, None)
+                    if sym in positions:
+                        positions.pop(sym)
         except Exception as e:
             logging.error(f"{sym} get_open_position_amt 오류: {e}")
     return cnt
@@ -109,6 +110,7 @@ def compute_bollinger_signal(df):
 def cleanup_orphan_orders():
     while True:
         try:
+            from binance_client import client
             open_orders = client.futures_get_open_orders()
             symbols_with_orders = set(o['symbol'] for o in open_orders)
             with positions_lock:
@@ -134,17 +136,18 @@ def monitor_position(sym):
         initial_count = pos_info['initial_match_count']
         primary_sig = pos_info['primary_sig']
         start_time = pos_info['start_time']
-        _, qty_precision, _ = get_precision(sym)
+        _, qty_precision, min_qty = get_precision(sym)
         quant = Decimal(f"1e-{qty_precision}")
 
         realized_usdt = Decimal("0")
         remaining_qty = initial_quantity
+        partial_exit_done = False  # 부분 청산 완료 여부 플래그 (1회만 실행)
 
         while True:
             time.sleep(10)
             amt = get_open_position_amt(sym)
-            _, _, min_qty = get_precision(sym)
-            if amt < min_qty:
+            _, _, min_qty_val = get_precision(sym)
+            if amt < min_qty_val:
                 amt = 0
 
             # 1) 전량 청산 상태 처리 (amt == 0)
@@ -177,7 +180,8 @@ def monitor_position(sym):
                         'symbol': sym,
                         'side': primary_sig,
                         'pnl_pct': float((realized_usdt / (entry_price * initial_quantity)) * 100),
-                        'pnl_usdt': float(realized_usdt)
+                        'pnl_usdt': float(realized_usdt),
+                        'exit_type': 'full_close'
                     })
 
                 # EXIT 알림
@@ -192,7 +196,8 @@ def monitor_position(sym):
                 send_telegram(msg)
 
                 with positions_lock:
-                    positions.pop(sym, None)
+                    if sym in positions:
+                        positions.pop(sym)
                 break
 
             # 2) PnL 계산
@@ -238,6 +243,16 @@ def monitor_position(sym):
                             total_trades2 = wins + losses
                             win_rate2 = (wins / total_trades2 * 100) if total_trades2 > 0 else 0
 
+                            with trade_log_lock:
+                                trade_log.append({
+                                    'timestamp': time.time(),
+                                    'symbol': sym,
+                                    'side': primary_sig,
+                                    'pnl_pct': float((realized_usdt / (entry_price * initial_quantity)) * 100),
+                                    'pnl_usdt': float(realized_usdt),
+                                    'exit_type': 'no_signal'
+                                })
+
                             send_telegram(
                                 f"<b>🔸 EXIT: {sym}</b>\n"
                                 f"▶ 방향: {primary_sig.upper()}\n"
@@ -247,13 +262,14 @@ def monitor_position(sym):
                                 f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate2:.2f}%)"
                             )
                             with positions_lock:
-                                positions.pop(sym, None)
+                                if sym in positions:
+                                    positions.pop(sym)
                         break
 
             # 4) 자동 익절/손절 (잔량 전량 청산)
             remaining_amt = amt
             if remaining_amt > 0:
-                if pnl >= Decimal("0.002"):
+                if pnl >= PIL_PROFIT_THRESHOLD:  # 익절
                     if primary_sig == 'long':
                         pnl_usdt_partial = (mark_price - entry_price) * remaining_amt
                     else:
@@ -275,18 +291,28 @@ def monitor_position(sym):
                     total_trades = wins + losses
                     win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
 
+                    with trade_log_lock:
+                        trade_log.append({
+                            'timestamp': time.time(),
+                            'symbol': sym,
+                            'side': primary_sig,
+                            'pnl_pct': float((realized_usdt / (entry_price * initial_quantity)) * 100),
+                            'pnl_usdt': float(realized_usdt),
+                            'exit_type': 'auto_tp'
+                        })
+
                     send_telegram(
-                        f"<b>🔹 EXIT: {sym}</b>\n"
+                        f"<b>✅ AUTO-TP: {sym}</b>\n"
                         f"▶ 방향: {primary_sig.upper()}\n"
-                        f"▶ 청산 이유: AUTO-TP\n"
                         f"▶ 실현 손익: {realized_usdt:.2f} USDT\n"
                         f"▶ 결과: {result}\n"
                         f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate:.2f}%)"
                     )
                     with positions_lock:
-                        positions.pop(sym, None)
+                        if sym in positions:
+                            positions.pop(sym)
                     break
-                elif pnl <= Decimal("-0.005"):
+                elif pnl <= PIL_LOSS_THRESHOLD:  # 손절
                     if primary_sig == 'long':
                         pnl_usdt_partial = (mark_price - entry_price) * remaining_amt
                     else:
@@ -308,61 +334,79 @@ def monitor_position(sym):
                     total_trades = wins + losses
                     win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
 
+                    with trade_log_lock:
+                        trade_log.append({
+                            'timestamp': time.time(),
+                            'symbol': sym,
+                            'side': primary_sig,
+                            'pnl_pct': float((realized_usdt / (entry_price * initial_quantity)) * 100),
+                            'pnl_usdt': float(realized_usdt),
+                            'exit_type': 'auto_sl'
+                        })
+
                     send_telegram(
-                        f"<b>🔻 EXIT: {sym}</b>\n"
+                        f"<b>❌ AUTO-SL: {sym}</b>\n"
                         f"▶ 방향: {primary_sig.upper()}\n"
-                        f"▶ 청산 이유: AUTO-SL\n"
                         f"▶ 실현 손익: {realized_usdt:.2f} USDT\n"
                         f"▶ 결과: {result}\n"
                         f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate:.2f}%)"
                     )
                     with positions_lock:
-                        positions.pop(sym, None)
+                        if sym in positions:
+                            positions.pop(sym)
                     break
 
-            # 5) 부분 익절: 신호 하나 줄고 PnL > 0일 때만
-            df1 = get_ohlcv(sym, '1m', limit=50)
-            df5 = get_ohlcv(sym, '5m', limit=50)
-            if df1 is None or df5 is None:
-                continue
-            sig1_l, sig1_s = count_entry_signals(df1)
-            sig5_l, sig5_s = count_entry_signals(df5)
-            current_count = max(sig1_l, sig1_s) + max(sig5_l, sig5_s)
+            # 5) 부분 익절: 신호 하나 줄고 PnL > 0일 때만 (1회만 실행)
+            if not partial_exit_done:
+                df1 = get_ohlcv(sym, '1m', limit=50)
+                df5 = get_ohlcv(sym, '5m', limit=50)
+                if df1 is not None and len(df1) >= 50 and df5 is not None and len(df5) >= 50:
+                    sig1_l, sig1_s = count_entry_signals(df1)
+                    sig5_l, sig5_s = count_entry_signals(df5)
+                    current_count = max(sig1_l, sig1_s) + max(sig5_l, sig5_s)
 
-            if current_count == initial_count - 1 and pnl > 0:
-                take_amt = (Decimal(str(remaining_amt)) * Decimal("0.5")).quantize(quant, rounding=ROUND_DOWN)
-                if take_amt > 0:
-                    if primary_sig == 'long':
-                        pnl_usdt_partial = (mark_price - entry_price) * take_amt
-                    else:
-                        pnl_usdt_partial = (entry_price - mark_price) * take_amt
-                    realized_usdt += pnl_usdt_partial
-                    remaining_qty -= take_amt
-                    create_market_order(
-                        sym,
-                        "SELL" if side == "long" else "BUY",
-                        float(take_amt),
-                        reduceOnly=True
-                    )
-            elif current_count <= initial_count - 2 and pnl > 0:
-                take_amt = (Decimal(str(remaining_amt)) * Decimal("0.5")).quantize(quant, rounding=ROUND_DOWN)
-                if take_amt > 0:
-                    if primary_sig == 'long':
-                        pnl_usdt_partial = (mark_price - entry_price) * take_amt
-                    else:
-                        pnl_usdt_partial = (entry_price - mark_price) * take_amt
-                    realized_usdt += pnl_usdt_partial
-                    remaining_qty -= take_amt
-                    create_market_order(
-                        sym,
-                        "SELL" if side == "long" else "BUY",
-                        float(take_amt),
-                        reduceOnly=True
-                    )
+                    # 신호 1개 감소 시 50% 부분 청산
+                    if current_count == initial_count - 1 and pnl > 0:
+                        take_amt = (Decimal(str(remaining_amt)) * PARTIAL_EXIT_RATIO).quantize(quant, rounding=ROUND_DOWN)
+                        if take_amt > min_qty_val:
+                            if primary_sig == 'long':
+                                pnl_usdt_partial = (mark_price - entry_price) * take_amt
+                            else:
+                                pnl_usdt_partial = (entry_price - mark_price) * take_amt
+                            realized_usdt += pnl_usdt_partial
+                            remaining_qty -= take_amt
+                            create_market_order(
+                                sym,
+                                "SELL" if side == "long" else "BUY",
+                                float(take_amt),
+                                reduceOnly=True
+                            )
+                            
+                            # 부분 청산 알림
+                            msg = (
+                                f"<b>🔸 PARTIAL EXIT: {sym}</b>\n"
+                                f"▶ 방향: {primary_sig.upper()}\n"
+                                f"▶ 부분 청산량: {take_amt:.4f}\n"
+                                f"▶ 부분 실현 손익: {pnl_usdt_partial:.2f} USDT"
+                            )
+                            send_telegram(msg)
+                            
+                            # 트레이드 로그 기록
+                            with trade_log_lock:
+                                trade_log.append({
+                                    'timestamp': time.time(),
+                                    'symbol': sym,
+                                    'side': primary_sig,
+                                    'pnl_pct': float((pnl_usdt_partial / (entry_price * take_amt)) * 100),
+                                    'pnl_usdt': float(pnl_usdt_partial),
+                                    'exit_type': 'partial'
+                                })
+                            
+                            partial_exit_done = True  # 1회만 실행
 
             # 6) 잔량이 최소수량 미만일 때 최종 청산 + EXIT
             remaining_amt = get_open_position_amt(sym)
-            if 0 < remaining_amt < min_qty:
+            if 0 < remaining_amt < min_qty_val:
                 create_market_order(
                     sym,
                     "SELL" if side == "long" else "BUY",
@@ -386,22 +430,59 @@ def monitor_position(sym):
                 total_trades = wins + losses
                 win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
 
+                with trade_log_lock:
+                    trade_log.append({
+                        'timestamp': time.time(),
+                        'symbol': sym,
+                        'side': primary_sig,
+                        'pnl_pct': float((realized_usdt / (entry_price * initial_quantity)) * 100),
+                        'pnl_usdt': float(realized_usdt),
+                        'exit_type': 'final_close'
+                    })
+
                 send_telegram(
-                    f"<b>🔸 EXIT: {sym}</b>\n"
+                    f"<b>🔚 FINAL CLOSE: {sym}</b>\n"
                     f"▶ 방향: {primary_sig.upper()}\n"
-                    f"▶ 청산 이유: FINAL CLOSE\n"
+                    f"▶ 청산 이유: MIN QTY CLOSE\n"
                     f"▶ 실현 손익: {realized_usdt:.2f} USDT\n"
                     f"▶ 결과: {result}\n"
                     f"▶ 누적 기록: {wins}승 {losses}패 (승률 {win_rate:.2f}%)"
                 )
                 with positions_lock:
-                    positions.pop(sym, None)
+                    if sym in positions:
+                        positions.pop(sym)
                 break
 
             time.sleep(0.1)
 
     except Exception as e:
         logging.error(f"{sym} 모니터링 오류: {e}")
+        # 오류 발생 시 강제 청산
+        try:
+            amt = get_open_position_amt(sym)
+            if amt > 0:
+                create_market_order(
+                    sym,
+                    "SELL" if primary_sig == "long" else "BUY",
+                    float(amt),
+                    reduceOnly=True
+                )
+                # 오류 로깅
+                with trade_log_lock:
+                    trade_log.append({
+                        'timestamp': time.time(),
+                        'symbol': sym,
+                        'side': primary_sig,
+                        'pnl_pct': 0,
+                        'pnl_usdt': 0,
+                        'exit_type': 'error'
+                    })
+                # 알림
+                send_telegram(f"<b>⛔ ERROR EXIT: {sym}</b>\n▶ 오류로 인한 강제 청산")
+        finally:
+            with positions_lock:
+                if sym in positions:
+                    positions.pop(sym)
 
 def analyze_market():
     tradable_symbols = []
@@ -503,8 +584,10 @@ def analyze_market():
                 time.sleep(dynamic_wait)
 
                 try:
+                    from binance_client import client
                     order_info = client.futures_get_order(symbol=sym, orderId=order_id)
-                except Exception:
+                except Exception as e:
+                    logging.error(f"주문 확인 실패: {e}")
                     cancel_all_orders_for_symbol(sym)
                     continue
 
@@ -583,8 +666,9 @@ def analyze_market():
 if __name__ == "__main__":
     try:
         send_telegram("<b>🤖 봇 시작</b>")
-    except:
-        pass
+    except Exception as e:
+        logging.error(f"텔레그램 시작 알림 실패: {e}")
+    
     start_summary_scheduler(trade_log, trade_log_lock)
     pos_mon = PositionMonitor(positions, positions_lock)
     pos_mon.start()
@@ -597,4 +681,5 @@ if __name__ == "__main__":
             time.sleep(30)
     except KeyboardInterrupt:
         pos_mon.stop()
+        send_telegram("<b>🛑 봇 수동 종료</b>")
         sys.exit(0)

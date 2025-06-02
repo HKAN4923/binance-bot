@@ -13,7 +13,7 @@ def calculate_qty(balance: float, price: float, leverage: int, fraction: float, 
     raw = Decimal(balance) * Decimal(leverage) * Decimal(fraction) / Decimal(price)
     quant = Decimal('1e-{}'.format(qty_precision))
     qty = raw.quantize(quant, rounding=ROUND_DOWN)
-    if qty < Decimal(str(min_qty)):
+    if qty < Decimal(str(min_qty))):
         return 0.0
     return float(qty)
 
