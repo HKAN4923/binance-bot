@@ -2,11 +2,12 @@
 import os
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
 # Binance API
-API_KEY = os.getenv('BINANCE_API_KEY')
-API_SECRET = os.getenv('BINANCE_API_SECRET')
+BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
+BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
 
 # Trading Settings
 SYMBOL = 'BTCUSDT'
@@ -43,8 +44,15 @@ SYMBOLS = ['BTCUSDT', 'ETHUSDT']  # 거래 대상 심볼 리스트
 # ------------------------------------------------------------------------------
 # binance_client.py
 from binance.client import Client
-from config import BINANCE_API_KEY, BINANCE_API_SECRET, LEVERAGE
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
+BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
+BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
+LEVERAGE = 5
+
+# Initialize Binance client
 client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
 client.FUTURES_URL = 'https://fapi.binance.com'
 

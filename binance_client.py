@@ -1,22 +1,32 @@
 # binance_client.py
 from binance.client import Client
+import os
+from dotenv import load_dotenv
 import pandas as pd
-from config import BINANCE_API_KEY, BINANCE_API_SECRET, LEVERAGE
 
-# 바이낸스 클라이언트 생성
-client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+# Load environment variables
+load_dotenv()
+
+# Initialize Binance client
+client = Client(os.getenv('BINANCE_API_KEY'), os.getenv('BINANCE_API_SECRET'))
 client.FUTURES_URL = 'https://fapi.binance.com'
 
-# 심볼별 레버리지 설정
-def set_leverage(symbols):
+# Set leverage
+def set_leverage(symbols, leverage=5):
+    """
+    Set leverage for all symbols
+    """
     for sym in symbols:
         try:
-            client.futures_change_leverage(symbol=sym, leverage=LEVERAGE)
+            client.futures_change_leverage(symbol=sym, leverage=leverage)
         except Exception as e:
             print(f"[Leverage Error] {sym}: {e}")
 
-# 캔들 데이터 가져오기
+# Get candlestick data
 def get_klines(symbol, interval, limit=100):
+    """
+    Get candlestick data from Binance Futures
+    """
     data = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
     df = pd.DataFrame(data, columns=[
         'open_time','open','high','low','close','volume',
@@ -25,8 +35,11 @@ def get_klines(symbol, interval, limit=100):
     df[['open','high','low','close','volume']] = df[['open','high','low','close','volume']].astype(float)
     return df[['open_time','open','high','low','close','volume']]
 
-# 시장가 주문 실행
+# Place market order
 def place_order(symbol, side, quantity):
+    """
+    Place a market order
+    """
     return client.futures_create_order(
         symbol=symbol,
         side=side,
@@ -34,8 +47,11 @@ def place_order(symbol, side, quantity):
         quantity=quantity
     )
 
-# 오픈 포지션 조회
+# Get current position
 def get_open_position(symbol):
+    """
+    Get current open position
+    """
     pos = client.futures_position_information(symbol=symbol)
     for p in pos:
         amt = float(p['positionAmt'])
@@ -43,14 +59,21 @@ def get_open_position(symbol):
             return p
     return None
 
-# 현재 마크 가격 조회
+# Get mark price
 def get_mark_price(symbol):
+    """
+    Get current mark price
+    """
     res = client.futures_mark_price(symbol=symbol)
     return float(res['markPrice'])
 
-# SL/TP 설정 (STOP_MARKET과 TAKE_PROFIT_MARKET 이용)
+# Set stop loss and take profit
 def set_sl_tp(symbol, side, sl_price, tp_price, quantity):
+    """
+    Set stop loss and take profit orders
+    """
     try:
+        # OCO: STOP_MARKET + TAKE_PROFIT_MARKET
         client.futures_create_order(
             symbol=symbol,
             side=side,
