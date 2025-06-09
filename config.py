@@ -5,15 +5,37 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Binance API
-BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
-BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
+API_KEY = os.getenv('BINANCE_API_KEY')
+API_SECRET = os.getenv('BINANCE_API_SECRET')
+
+# Trading Settings
+SYMBOL = 'BTCUSDT'
+TIMEFRAME = '1h'
+QUANTITY = 0.001  # BTC quantity
+LEVERAGE = 5  # 5x leverage as requested
+
+# Linda Raschke trading parameters
+ATR_PERIOD = 14
+ATR_MULTIPLIER = 2.0
+ENTRY_THRESHOLD = 1.5  # ATR multiplier for entry
+EXIT_THRESHOLD = 0.5  # ATR multiplier for exit
+
+# Risk management
+MAX_POSITION_SIZE = 0.1  # Maximum BTC position size
+STOP_LOSS_PERCENT = 2.0  # 2% stop loss
+TAKE_PROFIT_PERCENT = 1.0  # 1% take profit
 
 # Telegram Bot
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
+# Logging
+LOG_FILE = 'trade_log.txt'
+
+# Status check interval
+STATUS_CHECK_INTERVAL = 3600  # 1 hour in seconds
+
 # Trading Settings
-LEVERAGE = 5
 HEARTBEAT_INTERVAL = 3600  # seconds
 USDT_RISK_PER_TRADE = 50   # USDT per entry
 SYMBOLS = ['BTCUSDT', 'ETHUSDT']  # 거래 대상 심볼 리스트
