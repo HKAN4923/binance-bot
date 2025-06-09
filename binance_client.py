@@ -1,134 +1,69 @@
-import os
-import math
-import time
-import logging
-from dotenv import load_dotenv
+# binance_client.py
 from binance.client import Client
-from binance.exceptions import BinanceAPIException
+import pandas as pd
+from config import BINANCE_API_KEY, BINANCE_API_SECRET, LEVERAGE
 
-load_dotenv()
-API_KEY = os.getenv("BINANCE_API_KEY")
-API_SECRET = os.getenv("BINANCE_API_SECRET")
+# 바이낸스 클라이언트 생성
+client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+client.FUTURES_URL = 'https://fapi.binance.com'
 
-client = Client(API_KEY, API_SECRET)
-
-# 주문 재시도 로직 추가 (핵심 개선)
-def create_order_with_retry(order_func, max_retries=3, **kwargs):
-    for attempt in range(max_retries):
+# 심볼별 레버리지 설정
+def set_leverage(symbols):
+    for sym in symbols:
         try:
-            return order_func(**kwargs)
-        except BinanceAPIException as e:
-            if e.code in [-1021, -2010, -4046]:  # 타임아웃, 주문량 부족 등
-                wait = 1 + attempt * 0.5
-                logging.warning(f"주문 재시도 ({attempt+1}/{max_retries}): {e}, {wait}초 대기")
-                time.sleep(wait)
-            else:
-                raise
+            client.futures_change_leverage(symbol=sym, leverage=LEVERAGE)
+        except Exception as e:
+            print(f"[Leverage Error] {sym}: {e}")
+
+# 캔들 데이터 가져오기
+def get_klines(symbol, interval, limit=100):
+    data = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
+    df = pd.DataFrame(data, columns=[
+        'open_time','open','high','low','close','volume',
+        'close_time','quote_asset_vol','num_trades','taker_base_vol','taker_quote_vol','ignore'
+    ])
+    df[['open','high','low','close','volume']] = df[['open','high','low','close','volume']].astype(float)
+    return df[['open_time','open','high','low','close','volume']]
+
+# 시장가 주문 실행
+def place_order(symbol, side, quantity):
+    return client.futures_create_order(
+        symbol=symbol,
+        side=side,
+        type='MARKET',
+        quantity=quantity
+    )
+
+# 오픈 포지션 조회
+def get_open_position(symbol):
+    pos = client.futures_position_information(symbol=symbol)
+    for p in pos:
+        amt = float(p['positionAmt'])
+        if amt != 0:
+            return p
     return None
 
-def get_open_position_amt(symbol: str) -> float:
-    try:
-        positions = client.futures_position_information(symbol=symbol)
-        for p in positions:
-            amt = float(p['positionAmt'])
-            if amt != 0:
-                return abs(amt)
-        return 0.0
-    except BinanceAPIException:
-        return 0.0
-
-def get_ohlcv(symbol, interval="5m", limit=100):
-    try:
-        time.sleep(0.05)  # API 호출 제한 방지
-        klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
-        import pandas as pd
-        df = pd.DataFrame(klines, columns=[
-            'time','open','high','low','close','volume',
-            'close_time','quote_asset_volume','num_trades',
-            'taker_buy_base_asset_volume','taker_buy_quote_asset_volume','ignore'
-        ])
-        # 필요한 컬럼만 수치형으로 변환
-        for c in ['open','high','low','close','volume']:
-            df[c] = pd.to_numeric(df[c])
-        return df
-    except Exception:
-        return None
-
-def change_leverage(symbol, lev):
-    try:
-        client.futures_change_leverage(symbol=symbol, leverage=lev)
-    except Exception:
-        pass
-
-def get_balance():
-    try:
-        bal = client.futures_account_balance()
-        return float(next(x for x in bal if x["asset"]=="USDT")["balance"])
-    except Exception:
-        return 0.0
-
+# 현재 마크 가격 조회
 def get_mark_price(symbol):
+    res = client.futures_mark_price(symbol=symbol)
+    return float(res['markPrice'])
+
+# SL/TP 설정 (STOP_MARKET과 TAKE_PROFIT_MARKET 이용)
+def set_sl_tp(symbol, side, sl_price, tp_price, quantity):
     try:
-        return float(client.futures_mark_price(symbol=symbol)["markPrice"])
-    except Exception:
-        return 0.0
-
-def get_precision(symbol):
-    info = client.futures_exchange_info()["symbols"]
-    f = next((x for x in info if x["symbol"]==symbol), None)
-    if not f:
-        return 8, 8, 0.0
-    p_price = int(-math.log10(float(next(filt for filt in f["filters"] if filt["filterType"]=="PRICE_FILTER")["tickSize"])))
-    p_qty = int(-math.log10(float(next(filt for filt in f["filters"] if filt["filterType"]=="LOT_SIZE")["stepSize"])))
-    min_qty = float(next(filt for filt in f["filters"] if filt["filterType"]=="LOT_SIZE")["stepSize"])
-    return p_price, p_qty, min_qty
-
-def create_market_order(symbol, side, qty, reduceOnly=False):
-    return create_order_with_retry(
-        client.futures_create_order,
-        symbol=symbol,
-        side=side,
-        type="MARKET",
-        quantity=qty,
-        reduceOnly=reduceOnly
-    )
-
-def create_stop_order(symbol, side, sl_price, qty):
-    return create_order_with_retry(
-        client.futures_create_order,
-        symbol=symbol,
-        side=side,
-        type="STOP_MARKET",
-        stopPrice=sl_price,
-        closePosition=True
-    )
-
-def create_take_profit(symbol, side, tp_price, qty):
-    return create_order_with_retry(
-        client.futures_create_order,
-        symbol=symbol,
-        side=side,
-        type="TAKE_PROFIT_MARKET",
-        stopPrice=tp_price,
-        closePosition=True
-    )
-
-def cancel_all_orders_for_symbol(symbol):
-    try:
-        orders = client.futures_get_open_orders(symbol=symbol)
-        for order in orders:
-            client.futures_cancel_order(symbol=symbol, orderId=order['orderId'])
-        logging.info(f"[{symbol}] 기존 주문 전부 취소 완료")
-    except BinanceAPIException:
-        pass
-
-def create_limit_order(symbol: str, side: str, quantity: float, price: float):
-    return create_order_with_retry(
-        client.futures_create_order,
-        symbol=symbol,
-        side=side,
-        type="LIMIT",
-        timeInForce="GTC",
-        quantity=quantity,
-        price=price
-    )
+        client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type='STOP_MARKET',
+            stopPrice=sl_price,
+            closePosition=True
+        )
+        client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type='TAKE_PROFIT_MARKET',
+            stopPrice=tp_price,
+            closePosition=True
+        )
+    except Exception as e:
+        print(f"[SL/TP Error] {symbol}: {e}")
