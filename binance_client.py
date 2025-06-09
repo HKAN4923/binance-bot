@@ -98,3 +98,46 @@ def get_balance():
         if b['asset'] == 'USDT':
             return float(b['balance'])
     return 0.0
+
+def cancel_all_orders_for_symbol(symbol):
+    """
+    Cancel all orders for a specific symbol
+    """
+    try:
+        client.futures_cancel_all_open_orders(symbol=symbol)
+        return True
+    except Exception as e:
+        print(f"Error canceling orders for {symbol}: {e}")
+        return False
+
+def get_all_open_orders(symbol):
+    """
+    Get all open orders for a specific symbol
+    """
+    try:
+        orders = client.futures_get_open_orders(symbol=symbol)
+        return orders
+    except Exception as e:
+        print(f"Error getting open orders for {symbol}: {e}")
+        return []
+
+def get_position_info(symbol):
+    """
+    Get detailed position information
+    """
+    try:
+        positions = client.futures_position_information(symbol=symbol)
+        return positions[0] if positions else None
+    except Exception as e:
+        print(f"Error getting position info for {symbol}: {e}")
+        return None
+
+def get_account_info():
+    """
+    Get account information
+    """
+    try:
+        return client.futures_account()
+    except Exception as e:
+        print(f"Error getting account info: {e}")
+        return None
