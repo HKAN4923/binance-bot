@@ -60,11 +60,9 @@ class PositionMonitor(threading.Thread):
                         return
 
                 # 메모리 누수 방지 (약한 참조 사용)
-                positions_ref = weakref.ref(self.positions)
-                
-                # 포지션별 모니터링
-                with self.positions_lock:
-                    current_positions = dict(positions_ref() or {})
+               with self.positions_lock:
+                   current_positions = self.positions.copy()
+
                 
                 for symbol, pos in current_positions.items():
                     side = pos['side']
