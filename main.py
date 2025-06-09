@@ -89,13 +89,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-                    side = 'SELL'
-                else:
-                    sl = entry_price + atr
-                    tp = entry_price - atr
-                    side = 'BUY'
-                set_sl_tp(sym, side, sl_price=round(sl, 2), tp_price=round(tp, 2), quantity=qty)
-                send_message(
-                    f"✏️ Entry {sig} {sym}\nqty={qty}\nentry={entry_price:.2f} SL={sl:.2f} TP={tp:.2f}"
-                )
-        time.sleep(5)
