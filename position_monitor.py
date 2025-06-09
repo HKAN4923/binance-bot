@@ -1,10 +1,15 @@
 import threading
 import time
 import logging
-import weakref  # 메모리 관리 개선
 from decimal import Decimal
 from collections import deque
-from binance_client import get_balance, cancel_all_orders_for_symbol, get_ohlcv, create_market_order, get_open_position_amt
+from binance_client import (
+    get_balance,
+    cancel_all_orders_for_symbol,
+    get_ohlcv,
+    create_market_order,
+    get_open_position_amt
+)
 from strategy import check_reversal_multi
 from telegram_notifier import send_telegram
 from config import MAX_TRADE_DURATION, EMERGENCY_PERIOD, EMERGENCY_DROP_PERCENT
@@ -28,64 +33,60 @@ class PositionMonitor(threading.Thread):
     def run(self):
         while not self._stop_event.is_set():
             try:
-                # 잔고 드로우다운 체크 (5초 주기)
+                # 현재 잔고 기록
                 current_balance = Decimal(str(get_balance()))
                 now = time.time()
                 self.balance_history.append((now, current_balance))
-                
-                # 오래된 데이터 제거
+
+                # 오래된 기록 제거
                 while self.balance_history and (now - self.balance_history[0][0]) > EMERGENCY_PERIOD:
                     self.balance_history.popleft()
-                
-                # 긴급 손실 체크
+
+                # 긴급 손실 감지
                 if len(self.balance_history) >= 2:
                     oldest_ts, oldest_bal = self.balance_history[0]
                     drawdown = (oldest_bal - current_balance) / oldest_bal if oldest_bal > 0 else Decimal("0")
-                    
                     if drawdown >= EMERGENCY_DROP_PERCENT:
                         logging.error(f"[긴급 손실] {drawdown * 100:.2f}% 손실 → 청산 후 종료")
                         send_telegram(f"<b>🚨 긴급 손실 {drawdown * 100:.2f}% 발생</b>\n포지션 전량 청산, 봇 종료")
-                        
+
                         with self.positions_lock:
                             symbols = list(self.positions.keys())
-                        
+
                         for symbol in symbols:
                             cancel_all_orders_for_symbol(symbol)
                             amt = get_open_position_amt(symbol)
                             if amt > 0:
                                 create_market_order(symbol, "SELL", amt, reduceOnly=True)
                             with self.positions_lock:
-                                if symbol in self.positions:
-                                    self.positions.pop(symbol, None)
+                                self.positions.pop(symbol, None)
                         return
 
-                # 메모리 누수 방지 (약한 참조 사용)
-               with self.positions_lock:
-                   current_positions = self.positions.copy()
+                # 현재 포지션 복사
+                with self.positions_lock:
+                    current_positions = self.positions.copy()
 
-                
                 for symbol, pos in current_positions.items():
                     side = pos['side']
                     start_time = pos['start_time']
 
-                    # 보유시간 초과 체크
+                    # 최대 보유 시간 초과 시 청산
                     if time.time() - start_time >= MAX_TRADE_DURATION:
                         logging.info(f"{symbol} 최대 보유시간 초과 → 청산")
                         cancel_all_orders_for_symbol(symbol)
                         amt = get_open_position_amt(symbol)
                         if amt > 0:
                             create_market_order(
-                                symbol, 
-                                "SELL" if side == "long" else "BUY", 
-                                amt, 
+                                symbol,
+                                "SELL" if side == "long" else "BUY",
+                                amt,
                                 reduceOnly=True
                             )
                         with self.positions_lock:
-                            if symbol in self.positions:
-                                self.positions.pop(symbol, None)
+                            self.positions.pop(symbol, None)
                         continue
 
-                    # 반전 신호 감시 (60초 이후부터)
+                    # 반전 신호 감지 (진입 후 60초 이후부터)
                     if time.time() - start_time > 60:
                         df1 = get_ohlcv(symbol, '1m', limit=50)
                         if df1 is not None and len(df1) >= 50:
@@ -102,11 +103,11 @@ class PositionMonitor(threading.Thread):
                                         reduceOnly=True
                                     )
                                 with self.positions_lock:
-                                    if symbol in self.positions:
-                                        self.positions.pop(symbol, None)
+                                    self.positions.pop(symbol, None)
                                 continue
 
                 time.sleep(5)
+
             except Exception as e:
                 logging.error(f"[PositionMonitor 오류] {e}")
                 time.sleep(5)
