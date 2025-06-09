@@ -1,62 +1,88 @@
+# config.py
 import os
-from decimal import Decimal
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# 1. 리미트 주문/지표 관련 파라미터
-PRIMARY_THRESHOLD = int(os.getenv("PRIMARY_THRESHOLD", 4))       # 3 → 4 (더 엄격)
-AUX_COUNT_THRESHOLD = int(os.getenv("AUX_COUNT_THRESHOLD", 3))   # 2 → 3
+# Binance API
+BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
+BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
 
-# 2. 30분 EMA 계산 기간 (변경 없음)
-EMA_SHORT_LEN = int(os.getenv("EMA_SHORT_LEN", 20))
-EMA_LONG_LEN = int(os.getenv("EMA_LONG_LEN", 50))
+# Telegram Bot
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-# 3. 거래량 스파이크 감지 (변경 없음)
-VOLUME_SPIKE_MULTIPLIER = float(os.getenv("VOLUME_SPIKE_MULTIPLIER", 2.0))
+# Trading Settings
+LEVERAGE = 5
+HEARTBEAT_INTERVAL = 3600  # seconds
+USDT_RISK_PER_TRADE = 50   # USDT per entry
+SYMBOLS = ['BTCUSDT', 'ETHUSDT']  # 거래 대상 심볼 리스트
 
-# 4. 리미트 주문 대기 시간 (변경 없음)
-LIMIT_ORDER_WAIT_BASE = int(os.getenv("LIMIT_ORDER_WAIT_BASE", 7))
+# ------------------------------------------------------------------------------
+# binance_client.py
+from binance.client import Client
+from config import BINANCE_API_KEY, BINANCE_API_SECRET, LEVERAGE
 
-# 5. 리미트 주문 진입 시 가격 오프셋 (변경 없음)
-LIMIT_OFFSET = Decimal(os.getenv("LIMIT_OFFSET", "0.0002"))
+client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+client.FUTURES_URL = 'https://fapi.binance.com'
 
-# 6. TP/SL 비율 - 핵심 개선!
-TP_RATIO = Decimal(os.getenv("TP_RATIO", "0.025"))  # 1.75% → 2.5%
-SL_RATIO = Decimal(os.getenv("SL_RATIO", "0.005"))  # 0.8% → 0.5%
+# 모든 심볼에 레버리지 설정
+def set_leverage(symbols):
+    for sym in symbols:
+        try:
+            client.futures_change_leverage(symbol=sym, leverage=LEVERAGE)
+        except Exception as e:
+            print(f"[Leverage Error] {sym}: {e}")
 
-# 7. PnL 기반 감시 임계값 (변경 없음)
-PIL_LOSS_THRESHOLD = Decimal(os.getenv("PIL_LOSS_THRESHOLD", "0.005"))
-PIL_PROFIT_THRESHOLD = Decimal(os.getenv("PIL_PROFIT_THRESHOLD", "0.005"))
+# 캔들 데이터 가져오기
+import pandas as pd
 
-# 8. 시장 분석 주기 (변경 없음)
-ANALYSIS_INTERVAL_SEC = int(os.getenv("ANALYSIS_INTERVAL_SEC", 10))
+def get_klines(symbol, interval, limit=100):
+    data = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
+    df = pd.DataFrame(data, columns=[
+        'open_time','open','high','low','close','volume',
+        'close_time','quote_asset_vol','num_trades','taker_base_vol','taker_quote_vol','ignore'
+    ])
+    df[['open','high','low','close','volume']] = df[['open','high','low','close','volume']].astype(float)
+    return df[['open_time','open','high','low','close','volume']]
 
-# 2. 레버리지 및 동시 포지션 제한
-LEVERAGE = int(os.getenv("LEVERAGE", 10))
-MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", 3))
+# 시장가 주문
+def place_order(symbol, side, quantity):
+    return client.futures_create_order(
+        symbol=symbol,
+        side=side,
+        type='MARKET',
+        quantity=quantity
+    )
 
-# 3. 청산/모니터링 관련 파라미터
-MAX_TRADE_DURATION = int(os.getenv("MAX_TRADE_DURATION", 45 * 60))
-EMERGENCY_PERIOD = int(os.getenv("EMERGENCY_PERIOD", 10 * 60))
-EMERGENCY_DROP_PERCENT = Decimal(os.getenv("EMERGENCY_DROP_PERCENT", "0.10"))
+# 현재 포지션 조회
+def get_open_position(symbol):
+    pos = client.futures_position_information(symbol=symbol)
+    for p in pos:
+        amt = float(p['positionAmt'])
+        if amt != 0:
+            return p
+    return None
 
-# 부분 청산 비율 (변경 없음)
-PARTIAL_EXIT_RATIO = Decimal(os.getenv("PARTIAL_EXIT_RATIO", "0.5"))
+# 마크 가격 조회
+def get_mark_price(symbol):
+    res = client.futures_mark_price(symbol=symbol)
+    return float(res['markPrice'])
 
-# 4. 요약 전송 설정 (Telegram) (변경 없음)
-SUMMARY_TIMES = [
-    (6, 30), (12, 0), (18, 0), (21, 30)
-]
-
-# 5. API 키 및 Telegram (변경 없음)
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-# 환경 변수 검증 (변경 없음)
-if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-    raise RuntimeError("BINANCE API 키 또는 시크릿이 설정되지 않았습니다.")
-if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-    raise RuntimeError("텔레그램 토큰 또는 챗 ID가 설정되지 않았습니다.")
+# 손절/익절 OCO 주문
+def set_sl_tp(symbol, side, sl_price, tp_price, quantity):
+    # OCO: STOP_MARKET + TAKE_PROFIT_MARKET
+    client.futures_create_order(
+        symbol=symbol,
+        side=side,
+        type='STOP_MARKET',
+        stopPrice=sl_price,
+        closePosition=True
+    )
+    client.futures_create_order(
+        symbol=symbol,
+        side=side,
+        type='TAKE_PROFIT_MARKET',
+        stopPrice=tp_price,
+        closePosition=True
+    )
