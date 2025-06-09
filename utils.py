@@ -182,17 +182,14 @@ def calculate_atr(df: pd.DataFrame, period: int = 14):
     atr = tr.rolling(window=period).mean()
     return atr
 
-def count_entry_signals(df: pd.DataFrame):
-    """
-    compute_all_signals를 이용해 df에서 long/short 신호 개수를 반환
-    반환: (long_count, short_count)
-    """
-    signals = compute_all_signals(df)
-    long_count = sum(1 for v in signals.values() if v == 'long')
-    short_count = sum(1 for v in signals.values() if v == 'short')
-    return long_count, short_count
+# 더 이상 count_entry_signals, compute_all_signals 함수는 정의하지 않습니다.
+# 이 두 함수는 모두 strategy.py 안에 구현되어 있으므로, 여기서는 제거(또는 주석 처리)했습니다.
 
-# 예시로 compute_all_signals는 strategy.py에 정의되어 있기 때문에 여기선 선언만 해둠
-# (실제 구현은 strategy.py에) 
-def compute_all_signals(df: pd.DataFrame):
-    raise NotImplementedError("compute_all_signals should be implemented in strategy.py")
+# def count_entry_signals(df: pd.DataFrame):
+#     signals = compute_all_signals(df)
+#     long_count = sum(1 for v in signals.values() if v == 'long')
+#     short_count = sum(1 for v in signals.values() if v == 'short')
+#     return long_count, short_count
+
+# def compute_all_signals(df: pd.DataFrame):
+#     raise NotImplementedError("compute_all_signals should be implemented in strategy.py")

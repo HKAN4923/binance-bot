@@ -1,13 +1,13 @@
 import pandas as pd
 import logging
+from decimal import Decimal
 from config import EMA_SHORT_LEN, EMA_LONG_LEN
 from utils import (
     calculate_rsi, calculate_macd, calculate_ema_cross,
-    calculate_stochastic, calculate_adx, count_entry_signals,
-    calculate_atr
+    calculate_stochastic, calculate_adx, calculate_atr
 )
 
-def compute_all_signals(df: pd.DataFrame):
+def compute_all_signals(df: pd.DataFrame) -> dict:
     """
     다중 지표를 계산해, 각 지표별 'long' 또는 'short' 반환.
     """
@@ -82,6 +82,20 @@ def compute_all_signals(df: pd.DataFrame):
         logging.error(f"Error in compute_all_signals: {e}")
         return {}
 
+def count_entry_signals(df: pd.DataFrame) -> (int, int):
+    """
+    compute_all_signals를 호출하여, df에서 long/short 신호 개수를 반환
+    반환: (long_count, short_count)
+    """
+    try:
+        signals = compute_all_signals(df)
+        long_count = sum(1 for v in signals.values() if v == 'long')
+        short_count = sum(1 for v in signals.values() if v == 'short')
+        return long_count, short_count
+    except Exception as e:
+        logging.error(f"count_entry_signals 오류: {e}")
+        return 0, 0
+
 def check_entry_multi(df: pd.DataFrame, threshold: int):
     """
     여러 지표(signal)에서 threshold 이상 일치하면 'long' 또는 'short' 반환.
@@ -100,14 +114,12 @@ def check_entry_multi(df: pd.DataFrame, threshold: int):
 def check_reversal_multi(df: pd.DataFrame, threshold: int = 3):
     """
     다중 반전 신호를 체크하는 예시 함수.
-    실제 전략에 맞춰 내부 로직을 수정하세요.
     - df: pandas DataFrame (1분봉 등)
     - threshold: 반전 신호 임계값 (기본 3)
     반환: 반전 신호 감지 시 True
     """
     try:
         signals = compute_all_signals(df)
-        # 예시: long이 많다가 short 신호가 일정 이상 나오면 반전으로 간주
         long_count = sum(1 for v in signals.values() if v == 'long')
         short_count = sum(1 for v in signals.values() if v == 'short')
         # 만약 short_count가 threshold 이상이면 반전(매도) 신호로 본다
