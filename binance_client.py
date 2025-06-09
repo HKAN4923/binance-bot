@@ -67,3 +67,11 @@ def set_sl_tp(symbol, side, sl_price, tp_price, quantity):
         )
     except Exception as e:
         print(f"[SL/TP Error] {symbol}: {e}")
+
+# 잔고 조회 함수 (USDT 잔고 확인용)
+def get_balance():
+    balances = client.futures_account_balance()
+    for b in balances:
+        if b['asset'] == 'USDT':
+            return float(b['balance'])
+    return 0.0
