@@ -6,108 +6,72 @@ from collections import deque
 from binance_client import (
     get_balance,
     cancel_all_orders_for_symbol,
-    get_ohlcv,
-    create_market_order,
-    get_open_position_amt
+    get_position_info,
+    get_mark_price,
+    get_all_open_orders
 )
-from strategy import check_reversal_multi
-from telegram_notifier import send_telegram
-from config import MAX_TRADE_DURATION, EMERGENCY_PERIOD, EMERGENCY_DROP_PERCENT
+from strategy import check_entry_signal
+from telegram_notifier import send_telegram_message
+from config import SYMBOLS, HEARTBEAT_INTERVAL
 
-class PositionMonitor(threading.Thread):
+def monitor_positions():
     """
-    포지션별 긴급 탈출 및 반전 신호 감시
-    - 5초 간격으로 체크 (잔고 샘플링 최적화)
+    Monitor open positions and send alerts
     """
-    def __init__(self, positions, positions_lock):
-        super().__init__()
-        self.daemon = True
-        self.positions = positions
-        self.positions_lock = positions_lock
-        self.balance_history = deque(maxlen=120)  # 10분(120*5초) 기록 보관
-        self._stop_event = threading.Event()
+    while True:
+        try:
+            for symbol in SYMBOLS:
+                position = get_position_info(symbol)
+                if position:
+                    # Get current price
+                    current_price = get_mark_price(symbol)
+                    
+                    # Calculate PnL
+                    position_size = float(position['positionAmt'])
+                    entry_price = float(position['entryPrice'])
+                    
+                    if position_size > 0:  # Long position
+                        pnl = (current_price - entry_price) * position_size
+                    else:  # Short position
+                        pnl = (entry_price - current_price) * abs(position_size)
+                    
+                    # Send position update
+                    message = f"Position Update:\n" \
+                             f"Symbol: {symbol}\n" \
+                             f"Position Size: {position_size}\n" \
+                             f"Entry Price: {entry_price:.2f}\n" \
+                             f"Current Price: {current_price:.2f}\n" \
+                             f"PnL: {pnl:.2f} USDT"
+                    send_telegram_message(message)
+            
+            time.sleep(HEARTBEAT_INTERVAL)
+            
+        except Exception as e:
+            message = f"Error in position monitor: {str(e)}"
+            send_telegram_message(message)
+            time.sleep(60)
 
-    def stop(self):
-        self._stop_event.set()
-
-    def run(self):
-        while not self._stop_event.is_set():
-            try:
-                # 현재 잔고 기록
-                current_balance = Decimal(str(get_balance()))
-                now = time.time()
-                self.balance_history.append((now, current_balance))
-
-                # 오래된 기록 제거
-                while self.balance_history and (now - self.balance_history[0][0]) > EMERGENCY_PERIOD:
-                    self.balance_history.popleft()
-
-                # 긴급 손실 감지
-                if len(self.balance_history) >= 2:
-                    oldest_ts, oldest_bal = self.balance_history[0]
-                    drawdown = (oldest_bal - current_balance) / oldest_bal if oldest_bal > 0 else Decimal("0")
-                    if drawdown >= EMERGENCY_DROP_PERCENT:
-                        logging.error(f"[긴급 손실] {drawdown * 100:.2f}% 손실 → 청산 후 종료")
-                        send_telegram(f"<b>🚨 긴급 손실 {drawdown * 100:.2f}% 발생</b>\n포지션 전량 청산, 봇 종료")
-
-                        with self.positions_lock:
-                            symbols = list(self.positions.keys())
-
-                        for symbol in symbols:
-                            cancel_all_orders_for_symbol(symbol)
-                            amt = get_open_position_amt(symbol)
-                            if amt > 0:
-                                create_market_order(symbol, "SELL", amt, reduceOnly=True)
-                            with self.positions_lock:
-                                self.positions.pop(symbol, None)
-                        return
-
-                # 현재 포지션 복사
-                with self.positions_lock:
-                    current_positions = self.positions.copy()
-
-                for symbol, pos in current_positions.items():
-                    side = pos['side']
-                    start_time = pos['start_time']
-
-                    # 최대 보유 시간 초과 시 청산
-                    if time.time() - start_time >= MAX_TRADE_DURATION:
-                        logging.info(f"{symbol} 최대 보유시간 초과 → 청산")
-                        cancel_all_orders_for_symbol(symbol)
-                        amt = get_open_position_amt(symbol)
-                        if amt > 0:
-                            create_market_order(
-                                symbol,
-                                "SELL" if side == "long" else "BUY",
-                                amt,
-                                reduceOnly=True
-                            )
-                        with self.positions_lock:
-                            self.positions.pop(symbol, None)
-                        continue
-
-                    # 반전 신호 감지 (진입 후 60초 이후부터)
-                    if time.time() - start_time > 60:
-                        df1 = get_ohlcv(symbol, '1m', limit=50)
-                        if df1 is not None and len(df1) >= 50:
-                            if check_reversal_multi(df1, threshold=3):  # 2 → 3 (더 엄격)
-                                logging.info(f"{symbol} 다중 반전 신호 감지 → 청산")
-                                send_telegram(f"🔁 반전 신호 감지: {symbol} 청산")
-                                cancel_all_orders_for_symbol(symbol)
-                                amt = get_open_position_amt(symbol)
-                                if amt > 0:
-                                    create_market_order(
-                                        symbol,
-                                        "SELL" if side == "long" else "BUY",
-                                        amt,
-                                        reduceOnly=True
-                                    )
-                                with self.positions_lock:
-                                    self.positions.pop(symbol, None)
-                                continue
-
-                time.sleep(5)
-
-            except Exception as e:
-                logging.error(f"[PositionMonitor 오류] {e}")
-                time.sleep(5)
+def heartbeat():
+    """
+    Periodic health check and logging
+    """
+    while True:
+        try:
+            # Get account info
+            account = get_account_info()
+            if account:
+                # Log account status
+                logging.info(f"Account health check: {account['accountType']}")
+                
+                # Check for any open orders
+                for symbol in SYMBOLS:
+                    orders = get_all_open_orders(symbol)
+                    if orders:
+                        logging.info(f"Open orders for {symbol}: {len(orders)}")
+            
+            time.sleep(HEARTBEAT_INTERVAL)
+            
+        except Exception as e:
+            message = f"Error in heartbeat: {str(e)}"
+            send_telegram_message(message)
+            time.sleep(60)
