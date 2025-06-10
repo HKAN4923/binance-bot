@@ -1,4 +1,3 @@
-# File: strategy.py
 import pandas as pd
 import numpy as np
 from binance_client import BinanceClient
@@ -23,7 +22,6 @@ class ATRBreakoutStrategy:
         atr = self.calculate_atr(df)
         last = df.iloc[-1]
         prev = df.iloc[-2]
-        # Entry logic
         entry_price = prev['high'] + Config.ENTRY_MULTIPLIER * atr.iloc[-2]
         exit_price = prev['low'] - Config.EXIT_MULTIPLIER * atr.iloc[-2]
         if last['close'] > entry_price:

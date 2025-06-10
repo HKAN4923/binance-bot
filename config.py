@@ -4,18 +4,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
+    # ✅ 민감 정보는 .env에서 불러옴
+    BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+    BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+    # ✅ 트레이딩 설정
     EXCHANGE = os.getenv("EXCHANGE", "binance")
     LEVERAGE = int(os.getenv("LEVERAGE", 5))
     SLTP_RATIO = float(os.getenv("SLTP_RATIO", 1.8))
-    SYMBOL_SOURCE = os.getenv("SYMBOL_SOURCE", "top_volume_100")
-    MAX_POSITIONS = int(os.getenv("RISK_MAX_POSITIONS", 3))
-    MAX_EXPOSURE = float(os.getenv("RISK_MAX_EXPOSURE", 0.30))
-    ENTRY_TARGET_PER_DAY = int(os.getenv("ENTRY_TARGET_PER_DAY", 20))
-    WIN_RATE_TARGET = float(os.getenv("WIN_RATE_TARGET", 0.55))
     ATR_PERIOD = int(os.getenv("ATR_PERIOD", 20))
     ENTRY_MULTIPLIER = float(os.getenv("ENTRY_MULTIPLIER", 2.0))
     EXIT_MULTIPLIER = float(os.getenv("EXIT_MULTIPLIER", 1.8))
     BREAKOUT_TF = os.getenv("BREAKOUT_TF", "1h")
-    PULLBACK_TF = os.getenv("PULLBACK_TF", "15m")
-    CLEANUP_INTERVAL = int(os.getenv("CLEANUP_INTERVAL_S", 10))  # seconds
-    EMERGENCY_DRAWDOWN = float(os.getenv("EMERGENCY_DRAWDOWN", 0.05))  # 5%
+
+    # ✅ 리스크 관리
+    USDT_RISK_PER_TRADE = float(os.getenv("USDT_RISK_PER_TRADE", 10))  # 각 트레이드당 리스크 USDT 금액

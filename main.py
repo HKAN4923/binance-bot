@@ -1,43 +1,69 @@
-# File: main.py
 import time
 from binance_client import BinanceClient
 from strategy import ATRBreakoutStrategy
-from risk_manager import RiskManager
-from notifier import TelegramNotifier
-from position_monitor import PositionMonitor
-from sltp_cleaner import SLTPCleaner
+from utils import calculate_quantity
+from telegram_notifier import send_position_alert, send_position_close, send_error_alert
 from config import Config
 
+client = BinanceClient()
+strategy = ATRBreakoutStrategy(client)
 
-def main():
-    client = BinanceClient()
-    strat = ATRBreakoutStrategy(client)
-    risk = RiskManager(client)
-    monitor = PositionMonitor(client)
-    cleaner = SLTPCleaner(client)
-    cleaner.start()
+symbols = [s['symbol'] for s in client.client.get_ticker_24hr() if s['symbol'].endswith("USDT")][:100]
 
-    symbols = client.client.futures_exchange_info()["symbols"]
-    # filter top 100 by volume or load from config
-    selected = [s['symbol'] for s in symbols][:100]
-    entered_today = 0
+open_positions = {}
 
+def run_bot():
     while True:
-        for sym in selected:
-            monitor.check_drawdown()
-            if entered_today >= Config.ENTRY_TARGET_PER_DAY:
-                break
-            positions = client.client.futures_position_information(symbol=sym)
-            open_positions = [p for p in positions if float(p['positionAmt']) != 0]
-            if not risk.can_enter(len(open_positions)):
-                continue
-            signal = strat.generate_signals(sym)
-            if signal:
-                qty = risk.position_size(signal['price'])
-                order = client.place_order(sym, signal['side'], qty, stop_loss=signal['sl'], take_profit=signal['tp'])
-                TelegramNotifier.notify(f"{sym} {signal['side']} @ {signal['price']}, SL {signal['sl']}, TP {signal['tp']}")
-                entered_today += 1
-        time.sleep(60)  # wait before next cycle
+        try:
+            for symbol in symbols:
+                if len(open_positions) >= Config.MAX_POSITIONS:
+                    continue
 
-if __name__ == "__main__":
-    main()
+                if symbol in open_positions:
+                    continue
+
+                signal = strategy.generate_signals(symbol)
+                if signal:
+                    side = signal['side']
+                    entry_price = signal['price']
+                    sl_price = signal['sl']
+                    tp_price = signal['tp']
+                    balance = client.get_account_balance()
+                    quantity = calculate_quantity(symbol, balance)
+
+                    if quantity == 0:
+                        continue
+
+                    order = client.place_order(symbol, side, quantity, stop_loss=sl_price, take_profit=tp_price)
+                    open_positions[symbol] = {
+                        'side': side,
+                        'entry': entry_price,
+                        'sl': sl_price,
+                        'tp': tp_price,
+                        'qty': quantity,
+                        'time': time.time()
+                    }
+                    send_position_alert(symbol, side, quantity, entry_price, sl_price, tp_price)
+
+            closed = []
+            for symbol, data in open_positions.items():
+                current_price = float(client.client.futures_mark_price(symbol=symbol)['markPrice'])
+                side = data['side']
+
+                if side == 'BUY' and (current_price <= data['sl'] or current_price >= data['tp']):
+                    closed.append(symbol)
+                elif side == 'SELL' and (current_price >= data['sl'] or current_price <= data['tp']):
+                    closed.append(symbol)
+
+            for symbol in closed:
+                send_position_close(symbol, open_positions[symbol]['side'], open_positions[symbol]['qty'])
+                del open_positions[symbol]
+
+            time.sleep(30)
+
+        except Exception as e:
+            send_error_alert(f"Bot Error: {str(e)}")
+            time.sleep(60)
+
+if __name__ == '__main__':
+    run_bot()
