@@ -66,7 +66,7 @@ class PositionMonitor(threading.Thread):
                     df1 = get_ohlcv(sym, "1m", 50)
                     if df1 is None or len(df1) < 50:
                         continue
-                    if check_reversal_multi(df1, threshold=2):
+                    if check_reversal_multi(df1, threshold=3):
                         logging.info(f"{sym} 반전 신호 감지 → 청산")
                         send_telegram(f"🔁 반전 신호 감지: {sym} 청산")
                         cancel_all_sltp(sym)

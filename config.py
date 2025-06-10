@@ -17,7 +17,7 @@ class Config:
     MAX_EXPOSURE       = float(os.getenv("MAX_EXPOSURE", 0.30))  # 잔고 대비 진입 비중
 
     # 시장 분석 주기
-    ANALYSIS_INTERVAL_SEC = int(os.getenv("ANALYSIS_INTERVAL_SEC", 5))
+    ANALYSIS_INTERVAL_SEC = int(os.getenv("ANALYSIS_INTERVAL_SEC", 10))
 
     # TP/SL 비율
     TP_RATIO           = float(os.getenv("TP_RATIO", 1.8))
