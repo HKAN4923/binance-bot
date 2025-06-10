@@ -38,6 +38,7 @@ class RashkeBot:
             if s["symbol"].endswith("USDT")
         ][:50]
         self.positions: Dict[str, Position] = {}
+        self._last_log = 0
 
     def _calc_quantity(self, price: float) -> float:
         balance = self.client.get_account_balance()
@@ -75,6 +76,14 @@ class RashkeBot:
     def run(self):
         while True:
             try:
+                now = time.time()
+                if now - self._last_log >= 10:
+                    timestamp = time.strftime("%H:%M:%S", time.localtime(now))
+                    print(
+                        f"{timestamp} \ud83d\udcca \ubd84\uc11d\uc911..(\uc9c4\uc785 \ud3ec\uc9c0\uc158 {len(self.positions)}/{Config.MAX_POSITIONS})",
+                        flush=True,
+                    )
+                    self._last_log = now
                 if len(self.positions) < Config.MAX_POSITIONS:
                     for sym in self.symbols:
                         if sym in self.positions:
