@@ -3,41 +3,50 @@ import time
 import logging
 from dotenv import load_dotenv
 from binance.client import Client
-from requests.exceptions import RequestException
+from requests.exceptions import RequestException, HTTPError
 
 load_dotenv()
 
-# API Client with timeout settings
+# Initialize Binance Futures Client with timeouts
 CLIENT = Client(
     os.getenv("BINANCE_API_KEY"),
     os.getenv("BINANCE_API_SECRET"),
-    requests_params={"timeout": (3, 5)}  # (connect timeout, read timeout)
+    requests_params={"timeout": (3, 5)}
 )
 
-# USDT 페어에 대한 기본 레버리지 설정(최초 1회)
-for s in CLIENT.get_exchange_info()["symbols"]:
-    sym = s["symbol"]
-    if sym.endswith("USDT"):
-        try:
-            CLIENT.futures_change_leverage(
-                symbol=sym,
-                leverage=int(os.getenv("LEVERAGE", 5))
-            )
-            time.sleep(0.05)
-        except Exception as e:
-            logging.warning(f"Leverage set failed for {sym}: {e}")
+# Configure leverage only for active USDT perpetual futures contracts
+try:
+    futures_info = CLIENT.futures_exchange_info()["symbols"]
+    for s in futures_info:
+        sym = s["symbol"]
+        # Only perpetual USDT contracts in TRADING status
+        if sym.endswith("USDT") and s.get("contractType") == "PERPETUAL" and s.get("status") == "TRADING":
+            try:
+                CLIENT.futures_change_leverage(
+                    symbol=sym,
+                    leverage=int(os.getenv("LEVERAGE", 5))
+                )
+                time.sleep(0.05)
+            except HTTPError as e:
+                logging.warning(f"Leverage set HTTP error for {sym}: {e}")
+            except RequestException as e:
+                logging.warning(f"Leverage set network error for {sym}: {e}")
+            except Exception as e:
+                logging.warning(f"Leverage set failed for {sym}: {e}")
+except Exception as e:
+    logging.error(f"Failed to set initial leverage configuration: {e}")
 
 
 def get_open_position_amt(symbol: str) -> float:
     for p in CLIENT.futures_position_information(symbol=symbol):
-        amt = float(p["positionAmt"])
+        amt = float(p.get("positionAmt", 0))
         if amt != 0:
             return abs(amt)
     return 0.0
 
 
 def get_mark_price(symbol: str) -> float:
-    return float(CLIENT.futures_mark_price(symbol=symbol)["markPrice"])
+    return float(CLIENT.futures_mark_price(symbol=symbol).get("markPrice", 0))
 
 
 def get_klines(symbol: str, interval: str, limit: int):
@@ -49,12 +58,11 @@ def get_klines(symbol: str, interval: str, limit: int):
     delay = 1  # seconds
     for attempt in range(1, max_retries + 1):
         try:
-            klines = CLIENT.futures_klines(
+            return CLIENT.futures_klines(
                 symbol=symbol,
                 interval=interval,
                 limit=limit
             )
-            return klines
         except RequestException as e:
             logging.warning(f"get_klines attempt {attempt}/{max_retries} failed: {e}")
             time.sleep(delay)
@@ -69,18 +77,18 @@ def place_order(symbol: str, side: str, qty: float, stop_loss: float=None, take_
         type="MARKET",
         quantity=qty
     )
-    if stop_loss:
+    if stop_loss is not None:
         CLIENT.futures_create_order(
             symbol=symbol,
-            side=("SELL" if side=="BUY" else "BUY"),
+            side=("SELL" if side == "BUY" else "BUY"),
             type="STOP_MARKET",
             stopPrice=stop_loss,
             closePosition=True
         )
-    if take_profit:
+    if take_profit is not None:
         CLIENT.futures_create_order(
             symbol=symbol,
-            side=("SELL" if side=="BUY" else "BUY"),
+            side=("SELL" if side == "BUY" else "BUY"),
             type="TAKE_PROFIT_MARKET",
             stopPrice=take_profit,
             closePosition=True
@@ -90,7 +98,7 @@ def place_order(symbol: str, side: str, qty: float, stop_loss: float=None, take_
 def cancel_all_sltp(symbol: str):
     open_orders = CLIENT.futures_get_open_orders(symbol=symbol)
     for o in open_orders:
-        if o["type"] in ["TAKE_PROFIT_MARKET", "STOP_MARKET"]:
+        if o.get("type") in ["TAKE_PROFIT_MARKET", "STOP_MARKET"]:
             try:
                 CLIENT.futures_cancel_order(symbol=o["symbol"], orderId=o["orderId"])
             except Exception:
