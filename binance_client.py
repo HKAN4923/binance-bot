@@ -37,6 +37,14 @@ except Exception as e:
     logging.error(f"Failed to set initial leverage configuration: {e}")
 
 
+def get_account_balance() -> float:
+    """
+    Return current USDT balance from futures account.
+    """
+    bal = CLIENT.futures_account_balance()
+    return float(next(x["balance"] for x in bal if x.get("asset") == "USDT"))
+
+
 def get_open_position_amt(symbol: str) -> float:
     for p in CLIENT.futures_position_information(symbol=symbol):
         amt = float(p.get("positionAmt", 0))
@@ -95,8 +103,8 @@ def place_order(symbol: str, side: str, qty: float, stop_loss: float=None, take_
         )
 
 
-def cancel_all_sltp(symbol: str):
-    open_orders = CLIENT.futures_get_open_orders(symbol=symbol)
+def cancel_all_sltp(symbol: str=None):
+    open_orders = CLIENT.futures_get_open_orders(symbol=symbol) if symbol else CLIENT.futures_get_open_orders()
     for o in open_orders:
         if o.get("type") in ["TAKE_PROFIT_MARKET", "STOP_MARKET"]:
             try:
