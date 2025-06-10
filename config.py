@@ -21,3 +21,9 @@ class Config:
 
     # ✅ 리스크 관리
     USDT_RISK_PER_TRADE = float(os.getenv("USDT_RISK_PER_TRADE", 10))  # 각 트레이드당 리스크 USDT 금액
+
+    # ✅ Rashke general rules
+    MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", 3))
+    POSITION_SIZE = float(os.getenv("POSITION_SIZE", 0.3))  # balance percentage
+    POSITION_CHECK_INTERVAL = int(os.getenv("POSITION_CHECK_INTERVAL", 5))
+    TIMEZONE = os.getenv("TIMEZONE", "Asia/Seoul")

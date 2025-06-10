@@ -11,13 +11,20 @@ def send_telegram_message(message):
         return False
 
 def send_position_alert(symbol, side, quantity, entry_price, sl_price, tp_price):
-    message = f\"New position opened:\\nSymbol: {symbol}\\nSide: {side}\\nQuantity: {quantity}\\nEntry Price: {entry_price:.2f}\\nStop Loss: {sl_price:.2f}\\nTake Profit: {tp_price:.2f}\"
+    message = (
+        f"New position opened:\n"
+        f"Symbol: {symbol}\nSide: {side}\nQuantity: {quantity}\n"
+        f"Entry Price: {entry_price:.2f}\nStop Loss: {sl_price:.2f}\n"
+        f"Take Profit: {tp_price:.2f}"
+    )
     return send_telegram_message(message)
 
 def send_position_close(symbol, side, quantity):
-    message = f\"Position closed:\\nSymbol: {symbol}\\nSide: {side}\\nQuantity: {quantity}\"
+    message = (
+        f"Position closed:\nSymbol: {symbol}\nSide: {side}\nQuantity: {quantity}"
+    )
     return send_telegram_message(message)
 
 def send_error_alert(error_message):
-    message = f\"Error Alert:\\n{error_message}\"
+    message = f"Error Alert:\n{error_message}"
     return send_telegram_message(message)

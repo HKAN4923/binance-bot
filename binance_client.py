@@ -21,6 +21,11 @@ class BinanceClient:
             self.client.futures_create_order(symbol=symbol, side='SELL' if side=='BUY' else 'BUY', type='TAKE_PROFIT_MARKET', stopPrice=take_profit, closePosition=True)
         return order
 
+    def close_position(self, symbol, side, quantity):
+        """Close an open futures position and cancel related SL/TP orders."""
+        self.client.futures_create_order(symbol=symbol, side='SELL' if side=='BUY' else 'BUY', type='MARKET', quantity=quantity, reduceOnly=True)
+        self.cancel_all_sltp()
+
     def get_account_balance(self):
         return float(self.client.futures_account_balance()[0]['balance'])
 
