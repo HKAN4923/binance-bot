@@ -19,5 +19,23 @@ class Config:
     EXIT_MULTIPLIER = float(os.getenv("EXIT_MULTIPLIER", 1.8))
     BREAKOUT_TF = os.getenv("BREAKOUT_TF", "1h")
 
+    # number of simultaneous open positions allowed
+    MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", 3))
+
     # ✅ 리스크 관리
     USDT_RISK_PER_TRADE = float(os.getenv("USDT_RISK_PER_TRADE", 10))  # 각 트레이드당 리스크 USDT 금액
+
+# Module level shortcuts for convenient imports
+BINANCE_API_KEY = Config.BINANCE_API_KEY
+BINANCE_API_SECRET = Config.BINANCE_API_SECRET
+TELEGRAM_TOKEN = Config.TELEGRAM_TOKEN
+TELEGRAM_CHAT_ID = Config.TELEGRAM_CHAT_ID
+EXCHANGE = Config.EXCHANGE
+LEVERAGE = Config.LEVERAGE
+SLTP_RATIO = Config.SLTP_RATIO
+ATR_PERIOD = Config.ATR_PERIOD
+ENTRY_MULTIPLIER = Config.ENTRY_MULTIPLIER
+EXIT_MULTIPLIER = Config.EXIT_MULTIPLIER
+BREAKOUT_TF = Config.BREAKOUT_TF
+USDT_RISK_PER_TRADE = Config.USDT_RISK_PER_TRADE
+MAX_POSITIONS = Config.MAX_POSITIONS
