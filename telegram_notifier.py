@@ -1,5 +1,9 @@
 from telegram import Bot
-from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+from config import Config
+
+TELEGRAM_TOKEN = Config.TELEGRAM_TOKEN
+TELEGRAM_CHAT_ID = Config.TELEGRAM_CHAT_ID
+
 
 def send_telegram_message(message):
     try:
