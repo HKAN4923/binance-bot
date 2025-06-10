@@ -1,91 +1,43 @@
-# main.py
-import os
-from dotenv import load_dotenv
-from binance_client import client, set_leverage
-from config import *
-import logging
+# File: main.py
 import time
-from strategy import main as strategy_main
-from telegram_notifier import send_telegram_message
-from utils import calculate_atr, calculate_quantity
-from trade_summary import trade_summary
-from position_monitor import monitor_positions, heartbeat
+from binance_client import BinanceClient
+from strategy import ATRBreakoutStrategy
+from risk_manager import RiskManager
+from notifier import TelegramNotifier
+from position_monitor import PositionMonitor
+from sltp_cleaner import SLTPCleaner
+from config import Config
 
-# 로깅 설정
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-
-def initialize():
-    """
-    Initialize the trading bot
-    """
-    try:
-        # Load environment variables
-        load_dotenv()
-        
-        # Set leverage for all symbols
-        set_leverage(SYMBOLS)
-        
-        # Send startup notification
-        message = f"Trading bot started\n" \
-                 f"Symbol: {SYMBOL}\n" \
-                 f"Leverage: {LEVERAGE}x\n" \
-                 f"Timeframe: {TIMEFRAME}"
-        send_telegram_message(message)
-        
-        # Log initialization
-        logging.info("Trading bot initialized successfully")
-        
-    except Exception as e:
-        logging.error(f"Initialization error: {e}")
-        raise
 
 def main():
-    """
-    Main function to run the trading bot
-    """
-    try:
-        initialize()
-        
-        # 모니터 스레드
-        threading.Thread(target=monitor_positions, daemon=True).start()
-        threading.Thread(target=heartbeat, daemon=True).start()
+    client = BinanceClient()
+    strat = ATRBreakoutStrategy(client)
+    risk = RiskManager(client)
+    monitor = PositionMonitor(client)
+    cleaner = SLTPCleaner(client)
+    cleaner.start()
 
-        # 메인 트레이딩 루프
-        while True:
-            for sym in SYMBOLS:
-                df = get_klines(sym, '1m', limit=100)
-                sig = check_entry(df)
-                if sig:
-                    qty = calculate_quantity(sym)
-                    order = place_order(sym, sig, qty)
-                    entry_price = float(order['avgFillPrice'])
-                    atr = calculate_atr(df).iloc[-1]
-                    if sig == 'BUY':
-                        sl = entry_price - atr
-                        tp = entry_price + atr
-                        side = 'SELL'
-                    else:
-                        sl = entry_price + atr
-                        tp = entry_price - atr
-                        side = 'BUY'
-                    set_sl_tp(sym, side, sl_price=round(sl, 2), tp_price=round(tp, 2), quantity=qty)
-                    send_telegram_message(
-                        f"✏️ Entry {sig} {sym}\nqty={qty}\nentry={entry_price:.2f} SL={sl:.2f} TP={tp:.2f}"
-                    )
-            time.sleep(5)
-    except KeyboardInterrupt:
-        logging.info("Trading bot stopped by user")
-        message = "Trading bot stopped by user"
-        send_telegram_message(message)
-    except Exception as e:
-        logging.error(f"Main loop error: {e}")
-        message = f"Error in trading bot: {str(e)}"
-        send_telegram_message(message)
-        time.sleep(60)  # Wait before retrying
+    symbols = client.client.futures_exchange_info()["symbols"]
+    # filter top 100 by volume or load from config
+    selected = [s['symbol'] for s in symbols][:100]
+    entered_today = 0
+
+    while True:
+        for sym in selected:
+            monitor.check_drawdown()
+            if entered_today >= Config.ENTRY_TARGET_PER_DAY:
+                break
+            positions = client.client.futures_position_information(symbol=sym)
+            open_positions = [p for p in positions if float(p['positionAmt']) != 0]
+            if not risk.can_enter(len(open_positions)):
+                continue
+            signal = strat.generate_signals(sym)
+            if signal:
+                qty = risk.position_size(signal['price'])
+                order = client.place_order(sym, signal['side'], qty, stop_loss=signal['sl'], take_profit=signal['tp'])
+                TelegramNotifier.notify(f"{sym} {signal['side']} @ {signal['price']}, SL {signal['sl']}, TP {signal['tp']}")
+                entered_today += 1
+        time.sleep(60)  # wait before next cycle
 
 if __name__ == "__main__":
     main()
