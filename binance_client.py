@@ -1,5 +1,6 @@
 from binance.client import Client
 from config import Config
+import time  # 상단에 추가
 
 class BinanceClient:
     def __init__(self):
