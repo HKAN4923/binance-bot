@@ -1,162 +1,131 @@
-# strategy.py
 import pandas as pd
 import numpy as np
-import logging
-from decimal import Decimal
-from config import EMA_SHORT_LEN, EMA_LONG_LEN
+from config import Config
 
-def calculate_rsi(df: pd.DataFrame, length: int = 9):
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=length).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=length).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
+class BaseStrategy:
+    def __init__(self, client):
+        self.client = client
 
-def calculate_macd(df: pd.DataFrame, fast: int = 8, slow: int = 17, signal_len: int = 9):
-    ema_fast = df['close'].ewm(span=fast, adjust=False).mean()
-    ema_slow = df['close'].ewm(span=slow, adjust=False).mean()
-    macd = ema_fast - ema_slow
-    signal = macd.ewm(span=signal_len, adjust=False).mean()
-    df['macd_hist'] = macd - signal
+    def _fetch(self, symbol, interval, limit):
+        klines = self.client.get_klines(symbol, interval, limit=limit)
+        cols = ["open_time","open","high","low","close","volume","close_time","qa","nt","tb","tq","ignore"]
+        df = pd.DataFrame(klines, columns=cols)
+        df[["open","high","low","close","volume"]] = df[["open","high","low","close","volume"]].astype(float)
+        return df
 
-def calculate_ema(df: pd.DataFrame, span: int):
-    return df['close'].ewm(span=span, adjust=False).mean()
+class ATRBreakoutStrategy(BaseStrategy):
+    def generate_signal(self, symbol):
+        df = self._fetch(symbol, Config.BREAKOUT_TF, Config.ATR_PERIOD*3)
+        if len(df) <= Config.ATR_PERIOD: return None
+        tr = pd.concat([
+            df["high"]-df["low"],
+            (df["high"]-df["close"].shift()).abs(),
+            (df["low"]-df["close"].shift()).abs()
+        ], axis=1).max(axis=1)
+        atr = tr.rolling(Config.ATR_PERIOD).mean()
+        prev, last = df.iloc[-2], df.iloc[-1]
+        bh = prev["high"] + Config.ENTRY_MULTIPLIER * atr.iloc[-2]
+        bl = prev["low"] - Config.ENTRY_MULTIPLIER * atr.iloc[-2]
+        if last["close"] > bh:
+            entry = last["close"]
+            sl = entry - (entry-bh)*Config.SL_RATIO
+            tp = entry + (entry-sl)*Config.TP_RATIO
+            return {"side":"BUY","entry":entry,"sl":sl,"tp":tp}
+        if last["close"] < bl:
+            entry = last["close"]
+            sl = entry + (bl-entry)*Config.SL_RATIO
+            tp = entry - (sl-entry)*Config.TP_RATIO
+            return {"side":"SELL","entry":entry,"sl":sl,"tp":tp}
+        return None
 
-def calculate_ema_cross(df: pd.DataFrame, short_len: int = EMA_SHORT_LEN, long_len: int = EMA_LONG_LEN):
-    df['ema_short'] = calculate_ema(df, short_len)
-    df['ema_long'] = calculate_ema(df, long_len)
+class PreviousDayBreakoutStrategy(BaseStrategy):
+    def generate_signal(self, symbol):
+        df = self._fetch(symbol, "1h", 60)
+        if len(df) < 26: return None
+        df["date"] = pd.to_datetime(df["open_time"], unit="ms").dt.date
+        prev_day = df["date"].iloc[-1] - pd.Timedelta(days=1)
+        prev_df = df[df["date"] == prev_day]
+        if prev_df.empty: return None
+        ph, pl = prev_df["high"].max(), prev_df["low"].min()
+        last = df.iloc[-1]
+        vol_ma = df["volume"].iloc[-6:-1].mean()
+        if last["close"] > ph*1.002 and last["volume"]>vol_ma:
+            entry = last["close"]
+            sl = min(ph, entry*(1-Config.SL_RATIO))
+            risk = entry-sl
+            tp = entry + 2*risk
+            return {"side":"BUY","entry":entry,"sl":sl,"tp":tp}
+        if last["close"] < pl*0.998 and last["volume"]>vol_ma:
+            entry = last["close"]
+            sl = max(pl, entry*(1+Config.SL_RATIO))
+            risk = sl-entry
+            tp = entry - 2*risk
+            return {"side":"SELL","entry":entry,"sl":sl,"tp":tp}
+        return None
 
-def calculate_stochastic(df: pd.DataFrame, k_period: int = 9, d_period: int = 3):
-    low_min = df['low'].rolling(k_period).min()
-    high_max = df['high'].rolling(k_period).max()
-    df['%K'] = (df['close'] - low_min) / (high_max - low_min) * 100
-    df['%D'] = df['%K'].rolling(d_period).mean()
+class MovingAveragePullbackStrategy(BaseStrategy):
+    def generate_signal(self, symbol):
+        df = self._fetch(symbol, "1h", 100)
+        if len(df) < 55: return None
+        ema20 = df["close"].ewm(span=20).mean()
+        ema50 = df["close"].ewm(span=50).mean()
+        prev, last = df.iloc[-2], df.iloc[-1]
+        # Bullish pullback
+        if prev["close"]<ema20.iloc[-2] and prev["close"]<ema50.iloc[-2] and last["close"]>ema20.iloc[-1]>=ema50.iloc[-1]:
+            low = df["low"].iloc[-5:-1].min()
+            if low>=ema50.iloc[-2]:
+                entry=last["close"]
+                sl= min(low, entry*(1-Config.SL_RATIO))
+                tp= entry+1.5*(entry-sl)
+                return {"side":"BUY","entry":entry,"sl":sl,"tp":tp}
+        # Bearish pullback
+        if prev["close"]>ema20.iloc[-2] and prev["close"]>ema50.iloc[-2] and last["close"]<ema20.iloc[-1]<=ema50.iloc[-1]:
+            high = df["high"].iloc[-5:-1].max()
+            if high<=ema50.iloc[-2]:
+                entry=last["close"]
+                sl= max(high, entry*(1+Config.SL_RATIO))
+                tp= entry-1.5*(sl-entry)
+                return {"side":"SELL","entry":entry,"sl":sl,"tp":tp}
+        return None
 
-def calculate_adx(df: pd.DataFrame, length: int = 10):
-    df['up_move'] = df['high'] - df['high'].shift(1)
-    df['down_move'] = df['low'].shift(1) - df['low']
-    df['+DM'] = np.where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), df['up_move'], 0.0)
-    df['-DM'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0.0)
-    df['TR'] = np.maximum.reduce([
-        df['high'] - df['low'],
-        (df['high'] - df['close'].shift(1)).abs(),
-        (df['low'] - df['close'].shift(1)).abs()
-    ])
-    atr = df['TR'].rolling(length).mean()
-    df['+DI'] = (df['+DM'] / atr) * 100
-    df['-DI'] = (df['-DM'] / atr) * 100
-    df['DX'] = (df['+DI'] - df['-DI']).abs() / (df['+DI'] + df['-DI']) * 100
-    df['ADX'] = df['DX'].rolling(length).mean()
+def check_entry_multi(df, threshold):
+    if df is None or len(df)<20: return None
+    long_s, short_s = 0, 0
+    c = df["close"]; v = df["volume"]
+    # MA
+    ma5, ma20 = c.rolling(5).mean(), c.rolling(20).mean()
+    long_s+= ma5.iloc[-1]>ma20.iloc[-1]; short_s+= ma5.iloc[-1]<ma20.iloc[-1]
+    # RSI
+    delta = c.diff(); gain = delta.where(delta>0,0); loss = -delta.where(delta<0,0)
+    rs = gain.rolling(14).mean()/loss.rolling(14).mean()
+    rsi = 100-100/(1+rs)
+    long_s+= rsi.iloc[-1]>50; short_s+= rsi.iloc[-1]<50
+    # Bollinger
+    sma20, std20 = c.rolling(20).mean(), c.rolling(20).std()
+    long_s+= c.iloc[-1]>sma20.iloc[-1]+2*std20.iloc[-1]
+    short_s+= c.iloc[-1]<sma20.iloc[-1]-2*std20.iloc[-1]
+    # OBV
+    obv = (np.sign(delta)*v).cumsum()
+    long_s+= obv.iloc[-1]>obv.iloc[-2]; short_s+= obv.iloc[-1]<obv.iloc[-2]
+    # Volume spike
+    long_s+= v.iloc[-1]>v.rolling(20).mean().iloc[-1]*2
+    if max(long_s, short_s) < threshold: return None
+    return "long" if long_s>short_s else "short"
 
-def calculate_atr(df: pd.DataFrame, length: int = 14):
-    df['TR'] = np.maximum.reduce([
-        df['high'] - df['low'],
-        (df['high'] - df['close'].shift(1)).abs(),
-        (df['low'] - df['close'].shift(1)).abs()
-    ])
-    return df['TR'].rolling(length).mean()
-
-def compute_all_signals(df: pd.DataFrame):
-    """
-    다중 지표를 계산해, 각 지표별 'long' 또는 'short' 반환.
-    """
-    try:
-        calculate_rsi(df)
-        calculate_macd(df)
-        calculate_ema_cross(df)
-        calculate_stochastic(df)
-        calculate_adx(df)
-        signals = {}
-
-        # RSI
-        last_rsi = df['rsi'].iloc[-1]
-        prev_rsi = df['rsi'].iloc[-2]
-        if prev_rsi < 35 < last_rsi:
-            signals['rsi'] = 'long'
-        elif prev_rsi > 65 > last_rsi:
-            signals['rsi'] = 'short'
-        else:
-            signals['rsi'] = None
-
-        # MACD
-        prev_hist = df['macd_hist'].iloc[-2]
-        last_hist = df['macd_hist'].iloc[-1]
-        if prev_hist < 0 < last_hist:
-            signals['macd'] = 'long'
-        elif prev_hist > 0 > last_hist:
-            signals['macd'] = 'short'
-        else:
-            signals['macd'] = None
-
-        # EMA Cross
-        prev_ema_s = df['ema_short'].iloc[-2]
-        prev_ema_l = df['ema_long'].iloc[-2]
-        last_ema_s = df['ema_short'].iloc[-1]
-        last_ema_l = df['ema_long'].iloc[-1]
-        if prev_ema_s < prev_ema_l < last_ema_s:
-            signals['ema'] = 'long'
-        elif prev_ema_s > prev_ema_l > last_ema_s:
-            signals['ema'] = 'short'
-        else:
-            signals['ema'] = None
-
-        # Stochastic
-        prev_K = df['%K'].iloc[-2]
-        prev_D = df['%D'].iloc[-2]
-        last_K = df['%K'].iloc[-1]
-        last_D = df['%D'].iloc[-1]
-        if prev_K < 20 < last_K and last_K > last_D:
-            signals['stoch'] = 'long'
-        elif prev_K > 80 > last_K and last_K < last_D:
-            signals['stoch'] = 'short'
-        else:
-            signals['stoch'] = None
-
-        # ADX
-        last_adx = df['ADX'].iloc[-1]
-        last_plus = df['+DI'].iloc[-1]
-        last_minus = df['-DI'].iloc[-1]
-        if last_adx > 20 and last_plus > last_minus:
-            signals['adx'] = 'long'
-        elif last_adx > 20 and last_minus > last_plus:
-            signals['adx'] = 'short'
-        else:
-            signals['adx'] = None
-
-        return signals
-    except Exception as e:
-        logging.error(f"Error in compute_all_signals: {e}")
-        return {}
-
-def count_entry_signals(df: pd.DataFrame):
-    """
-    5개 지표 결과를 집계해 long_count, short_count 반환
-    """
-    signals = compute_all_signals(df)
-    if not signals:
-        return 0, 0
-    long_count = sum(1 for v in signals.values() if v == 'long')
-    short_count = sum(1 for v in signals.values() if v == 'short')
-    return long_count, short_count
-
-def check_entry_multi(df: pd.DataFrame, threshold: int):
-    """
-    threshold 이상 지표 일치 시 'long' 또는 'short'
-    """
-    long_count, short_count = count_entry_signals(df)
-    if long_count >= threshold:
-        return 'long'
-    if short_count >= threshold:
-        return 'short'
-    return None
-
-def check_reversal_multi(df: pd.DataFrame, threshold: int):
-    """
-    진입 후 반전 감시용: compute_all_signals을 여러 지표로 확신도 합산 방식 구현 가능.
-    간단히 threshold 만큼 반대 신호가 나오면 True 반환.
-    """
-    signals = compute_all_signals(df)
-    if not signals:
-        return False
-    reverse_count = sum(1 for v in signals.values() if v is not None)
-    return reverse_count >= threshold
+def count_entry_signals(df):
+    if df is None or len(df)<20: return 0,0
+    # 동일 로직으로 카운트만
+    l,s = 0,0
+    c, v = df["close"], df["volume"]
+    ma5,ma20 = c.rolling(5).mean(), c.rolling(20).mean()
+    l+= ma5.iloc[-1]>ma20.iloc[-1]; s+= ma5.iloc[-1]<ma20.iloc[-1]
+    delta = c.diff(); gain = delta.where(delta>0,0); loss = -delta.where(delta<0,0)
+    rs = gain.rolling(14).mean()/loss.rolling(14).mean()
+    rsi = 100-100/(1+rs)
+    l+= rsi.iloc[-1]>50; s+= rsi.iloc[-1]<50
+    sma20,std20 = c.rolling(20).mean(), c.rolling(20).std()
+    l+= c.iloc[-1]>sma20.iloc[-1]+2*std20.iloc[-1]; s+= c.iloc[-1]<sma20.iloc[-1]-2*std20.iloc[-1]
+    obv = (np.sign(delta)*v).cumsum()
+    l+= obv.iloc[-1]>obv.iloc[-2]; s+= obv.iloc[-1]<obv.iloc[-2]
+    l+= v.iloc[-1]>v.rolling(20).mean().iloc[-1]*2
+    return l, s

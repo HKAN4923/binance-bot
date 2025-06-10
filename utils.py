@@ -1,56 +1,44 @@
-# utils.py
-from decimal import Decimal, ROUND_DOWN, getcontext
+import time
 import datetime
 import pytz
 import logging
+from decimal import Decimal, ROUND_DOWN
+from binance_client import CLIENT
 
-def to_kst(ts: float):
-    utc_dt = datetime.datetime.utcfromtimestamp(ts).replace(tzinfo=pytz.UTC)
-    return utc_dt.astimezone(pytz.timezone("Asia/Seoul"))
+def to_kst(ts: float) -> datetime.datetime:
+    utc = datetime.datetime.utcfromtimestamp(ts).replace(tzinfo=pytz.UTC)
+    return utc.astimezone(pytz.timezone("Asia/Seoul"))
 
-def calculate_qty(balance: float, price: float, leverage: int, fraction: float, qty_precision: int, min_qty: float):
-    getcontext().prec = qty_precision + 10
+def calculate_qty(balance: float, price: float, leverage: int, fraction: float, precision: int, min_qty: float) -> float:
     raw = Decimal(balance) * Decimal(leverage) * Decimal(fraction) / Decimal(price)
-    quant = Decimal('1e-{}'.format(qty_precision))
+    quant = Decimal(f"1e-{precision}")
     qty = raw.quantize(quant, rounding=ROUND_DOWN)
-    if qty < Decimal(str(min_qty)):
-        return 0.0
-    return float(qty)
+    return float(qty) if qty >= Decimal(str(min_qty)) else 0.0
 
-def get_top_100_volume_symbols():
-    from binance_client import client
+def get_top_100_volume_symbols() -> list:
     try:
-        stats_24h = client.futures_ticker()
-        usdt_pairs = [
+        stats = CLIENT.futures_ticker()
+        pairs = [
             {"symbol": s["symbol"], "volume": float(s["quoteVolume"])}
-            for s in stats_24h if s["symbol"].endswith("USDT")
+            for s in stats if s["symbol"].endswith("USDT")
         ]
-        usdt_pairs.sort(key=lambda x: x["volume"], reverse=True)
-        return [s["symbol"] for s in usdt_pairs[:100]]
+        pairs.sort(key=lambda x: x["volume"], reverse=True)
+        return [p["symbol"] for p in pairs[:100]]
     except Exception as e:
         logging.error(f"get_top_100_volume_symbols 오류: {e}")
         return []
 
-def get_tradable_futures_symbols():
-    from binance_client import client
+def get_ohlcv(symbol: str, interval: str="5m", limit: int=100):
+    import pandas as pd
     try:
-        exchange_info = client.futures_exchange_info()
-        symbols = [
-            s["symbol"] for s in exchange_info["symbols"]
-            if s["contractType"] == "PERPETUAL" and s["quoteAsset"] == "USDT" and s["status"] == "TRADING"
-        ]
-        return symbols
-    except Exception as e:
-        logging.error(f"get_tradable_futures_symbols 오류: {e}")
-        return []
-
-def get_tick_size(symbol: str):
-    from binance_client import client
-    from decimal import Decimal
-    info = client.futures_exchange_info()
-    for s in info['symbols']:
-        if s['symbol'] == symbol:
-            for f in s['filters']:
-                if f['filterType'] == 'PRICE_FILTER':
-                    return Decimal(str(f['tickSize']))
-    return Decimal("0.01")
+        time.sleep(0.05)
+        klines = CLIENT.futures_klines(symbol=symbol, interval=interval, limit=limit)
+        df = pd.DataFrame(klines, columns=[
+            "time","open","high","low","close","volume",
+            "close_time","qa","nt","tb","tq","ignore"
+        ])
+        for c in ["open","high","low","close","volume"]:
+            df[c] = pd.to_numeric(df[c])
+        return df
+    except:
+        return None

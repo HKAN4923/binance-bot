@@ -1,35 +1,30 @@
-# telegram_notifier.py
 import os
 import requests
 from dotenv import load_dotenv
 
 load_dotenv()
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-def send_telegram(msg):
+def send_telegram(msg: str):
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": msg,
-            "parse_mode": "HTML"
-        }
-        resp = requests.post(url, data=data)
-        if not resp.ok:
-            print("텔레그램 전송 실패:", resp.text)
-    except Exception as e:
-        print("텔레그램 오류:", e)
+        requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}
+        )
+    except:
+        pass
 
-# 이미지 전송 지원 (추가)
-def send_telegram_photo(photo_path, caption=""):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-        with open(photo_path, 'rb') as f:
-            files = {'photo': f}
-            data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': caption, 'parse_mode': 'HTML'}
-            resp = requests.post(url, files=files, data=data)
-        if not resp.ok:
-            print("텔레그램 사진 전송 실패:", resp.text)
-    except Exception as e:
-        print("텔레그램 오류:", e)
+def send_position_alert(symbol, side, qty, entry, sl, tp):
+    send_telegram(
+        f"<b>▶ ENTRY</b>\n"
+        f"{symbol} {side}\n"
+        f"Qty: {qty}\n"
+        f"Entry: {entry:.4f}\nSL: {sl:.4f} TP: {tp:.4f}"
+    )
+
+def send_position_close(symbol, side, qty):
+    send_telegram(f"<b>▶ CLOSE</b>\n{symbol} {side}\nQty: {qty}")
+
+def send_error_alert(msg: str):
+    send_telegram(f"<b>⚠️ ERROR</b>\n{msg}")
