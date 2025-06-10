@@ -123,21 +123,40 @@ class TradingBot:
 
                     if my_sig:
                         price = Decimal(str(df1["close"].iloc[-1]))
-                        sl = float(price * (1 - Config.SL_RATIO)) if my_sig == "long" else float(price * (1 + Config.SL_RATIO))
-                        tp = float(price * (1 + Config.TP_RATIO)) if my_sig == "long" else float(price * (1 - Config.TP_RATIO))
+                        # Decimal 연산을 위해 SL_RATIO, TP_RATIO를 Decimal로 변환
+                        sl = (price * (Decimal(1) - Decimal(str(Config.SL_RATIO)))).quantize(Decimal("1e-6")) if my_sig == "long" else (price * (Decimal(1) + Decimal(str(Config.SL_RATIO)))).quantize(Decimal("1e-6"))
+                        tp = (price * (Decimal(1) + Decimal(str(Config.TP_RATIO)))).quantize(Decimal("1e-6")) if my_sig == "long" else (price * (Decimal(1) - Decimal(str(Config.TP_RATIO)))).quantize(Decimal("1e-6"))
                         pos = Position(
-                            sym, "BUY" if my_sig == "long" else "SELL",
-                            self.calc_qty(float(price)), price,
-                            Decimal(str(sl)), Decimal(str(tp)),
-                            "내로직", "Multi", cnt5, cnt1, ""
+                            sym,
+                            "BUY" if my_sig == "long" else "SELL",
+                            self.calc_qty(float(price)),
+                            price,
+                            sl,
+                            tp,
+                            "내로직",
+                            "Multi",
+                            cnt5,
+                            cnt1,
+                            ""
                         )
                         self.open_pos(pos)
                     elif rashke_sig:
-                        entry, sl, tp = map(Decimal, (rashke_sig["entry"], rashke_sig["sl"], rashke_sig["tp"]))
+                        entry = Decimal(str(rashke_sig["entry"]))
+                        sl = Decimal(str(rashke_sig["sl"]))
+                        tp = Decimal(str(rashke_sig["tp"]))
                         side = rashke_sig["side"]
                         pos = Position(
-                            sym, side, self.calc_qty(float(entry)), entry,
-                            sl, tp, "라쉬케", ras_m, cnt5, cnt1, ras_m
+                            sym,
+                            side,
+                            self.calc_qty(float(entry)),
+                            entry,
+                            sl,
+                            tp,
+                            "라쉬케",
+                            ras_m,
+                            cnt5,
+                            cnt1,
+                            ras_m
                         )
                         self.open_pos(pos)
 
