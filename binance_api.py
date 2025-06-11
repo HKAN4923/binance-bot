@@ -73,3 +73,7 @@ def cancel_all_orders(symbol):
     return send_signed_request("DELETE", "/fapi/v1/allOpenOrders", {
         "symbol": symbol
     })
+
+# binance_api.py 안에 추가
+def place_market_exit(symbol, side, quantity):
+    return place_market_order(symbol, side, quantity)
