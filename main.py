@@ -1,179 +1,65 @@
+# main.py
 import time
-from decimal import Decimal, ROUND_DOWN
-from typing import Dict
+from strategy_orb import check_entry as orb_entry, check_exit as orb_exit
+from strategy_nr7 import check_entry as nr7_entry, check_exit as nr7_exit
+from strategy_pullback import check_entry as pullback_entry, check_exit as pullback_exit
+from strategy_ema_cross import check_entry as ema_entry, check_exit as ema_exit
+from position_manager import open_positions
+from telegram_bot import send_telegram
+from binance_api import get_price
+from utils import now_string
 
-from binance_client import (
-    get_account_balance, place_order, close_position,
-    get_mark_price
-)
-from telegram_notifier import (
-    send_telegram, send_position_alert, send_position_close, send_error_alert
-)
-from config import Config
-from strategy import (
-    ATRBreakoutStrategy,
-    PreviousDayBreakoutStrategy,
-    MovingAveragePullbackStrategy,
-    check_entry_multi,
-    count_entry_signals
-)
-from utils import (
-    to_kst,
-    get_top_100_volume_symbols,
-    get_ohlcv
-)
-from trade_summary import trade_summary
+SYMBOL_LIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]  # 기본 심볼 리스트
 
-import logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+def run_all_entries():
+    for symbol in SYMBOL_LIST:
+        orb_entry(symbol)
+        nr7_entry(symbol)
+        pullback_entry(symbol)
+        ema_entry(symbol)
 
+def run_all_exits():
+    for symbol in list(open_positions.keys()):
+        orb_exit(symbol)
+        nr7_exit(symbol)
+        pullback_exit(symbol)
+        ema_exit(symbol)
 
-class Position:
-    def __init__(self, symbol, side, qty, entry, sl, tp, reason, method, cnt5, cnt1, rashke):
-        self.symbol = symbol
-        self.side = side
-        self.qty = qty
-        self.entry = entry
-        self.sl = sl
-        self.tp = tp
-        self.reason = reason
-        self.method = method
-        self.cnt5 = cnt5
-        self.cnt1 = cnt1
-        self.rashke = rashke
-
-
-class TradingBot:
-    def __init__(self):
-        self.strategies = {
-            "ATR": ATRBreakoutStrategy(),
-            "PDH": PreviousDayBreakoutStrategy(),
-            "MAP": MovingAveragePullbackStrategy(),
-        }
-        self.positions: Dict[str, Position] = {}
-        self.last_log = 0
-
-    def calc_qty(self, price: float) -> float:
-        bal = get_account_balance()
-        qty = (bal * Config.MAX_EXPOSURE * Config.LEVERAGE) / price
-        return float(Decimal(qty).quantize(Decimal("1e-3"), rounding=ROUND_DOWN))
-
-    def open_pos(self, pos: Position):
-        try:
-            place_order(
-                pos.symbol, pos.side, pos.qty,
-                stop_loss=pos.sl, take_profit=pos.tp
-            )
-        except Exception as e:
-            send_error_alert(f"Order placement failed for {pos.symbol}: {e}")
-            return
-        self.positions[pos.symbol] = pos
-        send_position_alert(
-            pos.symbol, pos.side, pos.qty,
-            pos.entry, pos.sl, pos.tp
-        )
-        send_telegram(
-            f"<b>▶ ENTRY</b>\n"
-            f"{pos.symbol} {pos.side}\n"
-            f"Reason: {pos.reason}\nMethod: {pos.method}\n"
-            f"5m:{pos.cnt5} 1m:{pos.cnt1} Rashke:{pos.rashke}"
-        )
-
-    def close_pos(self, symbol: str):
-        pos = self.positions.pop(symbol)
-        mark = Decimal(str(get_mark_price(symbol)))
-        pnl = ((mark - pos.entry) if pos.side == "BUY" else (pos.entry - mark)) * Decimal(str(pos.qty))
-        close_position(symbol, pos.side, pos.qty)
-        trade_summary.record(float(pnl))
-        res = "WIN" if pnl > 0 else "LOSS"
-        send_position_close(symbol, pos.side, pos.qty)
-        send_telegram(
-            f"<b>▶ CLOSE</b>\n{symbol} {pos.side}\n"
-            f"PnL: {pnl:.2f} USDT ({float(pnl / (pos.entry * pos.qty) * 100):.2f}%)\n"
-            f"Result: {res}\n"
-            f"W:{trade_summary.wins} L:{trade_summary.losses} WR:{trade_summary.get_win_rate():.2f}%\n"
-            f"CumPnL: {trade_summary.get_total_pnl():.2f} USDT"
-        )
-
-    def run(self):
-        while True:
-            now = time.time()
-            if now - self.last_log >= 10:
-                print(f"{time.strftime('%H:%M:%S')} 분석중.. ({len(self.positions)}/{Config.MAX_POSITIONS})", flush=True)
-                self.last_log = now
-
-            # Entry logic
-            if len(self.positions) < Config.MAX_POSITIONS:
-                syms = get_top_100_volume_symbols()
-                for sym in syms:
-                    if sym in self.positions:
-                        continue
-                    df1 = get_ohlcv(sym, "1m", 50)
-                    df5 = get_ohlcv(sym, "5m", 50)
-                    cnt1 = sum(count_entry_signals(df1)) if df1 is not None else 0
-                    cnt5 = sum(count_entry_signals(df5)) if df5 is not None else 0
-                    my_sig = check_entry_multi(df1, Config.PRIMARY_THRESHOLD)
-                    rashke_sig = None
-                    ras_m = ""
-                    for k, strat in self.strategies.items():
-                        sig = strat.generate_signal(sym)
-                        if sig:
-                            rashke_sig, ras_m = sig, k
-                            break
-
-                    if my_sig:
-                        price = Decimal(str(df1["close"].iloc[-1]))
-                        # Decimal 연산을 위해 SL_RATIO, TP_RATIO를 Decimal로 변환
-                        sl = (price * (Decimal(1) - Decimal(str(Config.SL_RATIO)))).quantize(Decimal("1e-6")) if my_sig == "long" else (price * (Decimal(1) + Decimal(str(Config.SL_RATIO)))).quantize(Decimal("1e-6"))
-                        tp = (price * (Decimal(1) + Decimal(str(Config.TP_RATIO)))).quantize(Decimal("1e-6")) if my_sig == "long" else (price * (Decimal(1) - Decimal(str(Config.TP_RATIO)))).quantize(Decimal("1e-6"))
-                        pos = Position(
-                            sym,
-                            "BUY" if my_sig == "long" else "SELL",
-                            self.calc_qty(float(price)),
-                            price,
-                            sl,
-                            tp,
-                            "내로직",
-                            "Multi",
-                            cnt5,
-                            cnt1,
-                            ""
-                        )
-                        self.open_pos(pos)
-                    elif rashke_sig:
-                        entry = Decimal(str(rashke_sig["entry"]))
-                        sl = Decimal(str(rashke_sig["sl"]))
-                        tp = Decimal(str(rashke_sig["tp"]))
-                        side = rashke_sig["side"]
-                        pos = Position(
-                            sym,
-                            side,
-                            self.calc_qty(float(entry)),
-                            entry,
-                            sl,
-                            tp,
-                            "라쉬케",
-                            ras_m,
-                            cnt5,
-                            cnt1,
-                            ras_m
-                        )
-                        self.open_pos(pos)
-
-                    if len(self.positions) >= Config.MAX_POSITIONS:
-                        break
-
-            # Exit logic
-            for sym in list(self.positions):
-                pos = self.positions[sym]
-                mark = Decimal(str(get_mark_price(sym)))
-                if (pos.side == "BUY" and (mark <= pos.sl or mark >= pos.tp)) or \
-                   (pos.side == "SELL" and (mark >= pos.sl or mark <= pos.tp)):
-                    self.close_pos(sym)
-
-            time.sleep(Config.ANALYSIS_INTERVAL_SEC)
-
+def report_summary():
+    wins, losses, pnl = 0, 0, 0.0
+    try:
+        with open("trade_log.csv", "r") as f:
+            lines = f.readlines()[1:]  # skip header
+            for line in lines:
+                row = line.strip().split(",")
+                if row[5] == "exit":
+                    entry = float(row[4])
+                    exit_ = float(row[3])
+                    profit = (exit_ - entry) if row[2] == "long" else (entry - exit_)
+                    pnl += profit
+                    if profit > 0:
+                        wins += 1
+                    else:
+                        losses += 1
+        total = wins + losses
+        winrate = round((wins / total) * 100, 2) if total > 0 else 0
+        send_telegram(f"📊 누적 통계\n진입 수: {total}\n승: {wins} / 패: {losses}\n승률: {winrate}%\n손익합계: {round(pnl,2)}$")
+    except:
+        pass
 
 if __name__ == "__main__":
-    bot = TradingBot()
-    bot.run()
+    send_telegram("🤖 봇 시작됨")
+
+    loop_counter = 0
+    while True:
+        run_all_entries()
+
+        print(f"[{now_string()}] 분석 중... (진입 포지션 수: {len(open_positions)} / 최대: {MAX_POSITION_COUNT})")
+
+        run_all_exits()
+
+        if loop_counter % 720 == 0:  # 10초마다 1회 → 720 = 2시간
+            report_summary()
+
+        time.sleep(10)
+        loop_counter += 1

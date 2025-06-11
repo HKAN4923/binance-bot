@@ -1,44 +1,32 @@
-import time
-import datetime
-import pytz
-import logging
-from decimal import Decimal, ROUND_DOWN
-from binance_client import CLIENT
+# utils.py
+import os
+import json
+import csv
+from datetime import datetime, timedelta
+from risk_config import *
 
-def to_kst(ts: float) -> datetime.datetime:
-    utc = datetime.datetime.utcfromtimestamp(ts).replace(tzinfo=pytz.UTC)
-    return utc.astimezone(pytz.timezone("Asia/Seoul"))
+def utc_to_kst(utc_dt):
+    return utc_dt + timedelta(hours=9)
 
-def calculate_qty(balance: float, price: float, leverage: int, fraction: float, precision: int, min_qty: float) -> float:
-    raw = Decimal(balance) * Decimal(leverage) * Decimal(fraction) / Decimal(price)
-    quant = Decimal(f"1e-{precision}")
-    qty = raw.quantize(quant, rounding=ROUND_DOWN)
-    return float(qty) if qty >= Decimal(str(min_qty)) else 0.0
+def now_string():
+    return utc_to_kst(datetime.utcnow()).strftime('%Y-%m-%d %H:%M:%S')
 
-def get_top_100_volume_symbols() -> list:
-    try:
-        stats = CLIENT.futures_ticker()
-        pairs = [
-            {"symbol": s["symbol"], "volume": float(s["quoteVolume"])}
-            for s in stats if s["symbol"].endswith("USDT")
-        ]
-        pairs.sort(key=lambda x: x["volume"], reverse=True)
-        return [p["symbol"] for p in pairs[:100]]
-    except Exception as e:
-        logging.error(f"get_top_100_volume_symbols 오류: {e}")
-        return []
+def calculate_tp_sl(entry_price, tp_percent, sl_percent, side):
+    if side == "long":
+        tp = entry_price * (1 + tp_percent / 100)
+        sl = entry_price * (1 - sl_percent / 100)
+    else:  # short
+        tp = entry_price * (1 - tp_percent / 100)
+        sl = entry_price * (1 + sl_percent / 100)
+    return round(tp, 4), round(sl, 4)
 
-def get_ohlcv(symbol: str, interval: str="5m", limit: int=100):
-    import pandas as pd
-    try:
-        time.sleep(0.05)
-        klines = CLIENT.futures_klines(symbol=symbol, interval=interval, limit=limit)
-        df = pd.DataFrame(klines, columns=[
-            "time","open","high","low","close","volume",
-            "close_time","qa","nt","tb","tq","ignore"
-        ])
-        for c in ["open","high","low","close","volume"]:
-            df[c] = pd.to_numeric(df[c])
-        return df
-    except:
-        return None
+def log_trade(data: dict, file_path='trade_log.csv'):
+    file_exists = os.path.isfile(file_path)
+    with open(file_path, mode='a', newline='') as file:
+        writer = csv.DictWriter(file, fieldnames=data.keys())
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(data)
+
+def calculate_slippage(expected_price, actual_price):
+    return round(abs(expected_price - actual_price) / expected_price * 100, 3)
