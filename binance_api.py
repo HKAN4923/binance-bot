@@ -67,6 +67,7 @@ def place_market_order(symbol, side, quantity):
         "side": side,
         "type": "MARKET",
         "quantity": quantity
+        "newOrderRespType": "FULL"    # 체결 정보(fills) 포함 요청
     })
 
 def cancel_all_orders(symbol):
@@ -76,4 +77,12 @@ def cancel_all_orders(symbol):
 
 # binance_api.py 안에 추가
 def place_market_exit(symbol, side, quantity):
-    return place_market_order(symbol, side, quantity)
+     # 마켓 청산도 FULL 응답으로 체결 정보 받기
++    return send_signed_request("POST", "/fapi/v1/order", {
++        "symbol": symbol,
++        "side": side,
++        "type": "MARKET",
++        "quantity": quantity,
++        "newOrderRespType": "FULL"
+})
+

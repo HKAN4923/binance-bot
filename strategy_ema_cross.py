@@ -51,6 +51,7 @@ def check_entry(symbol):
 
     qty = calculate_order_quantity(symbol)
     resp = place_market_order(symbol, side, qty)
+
     entry_price = float(resp["fills"][0]["price"])
 
     add_position(symbol, entry_price, "ema", direction, qty)
