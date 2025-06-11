@@ -62,14 +62,18 @@ def place_limit_order(symbol, side, quantity, price):
     })
 
 def place_market_order(symbol, side, quantity):
-    return send_signed_request("POST", "/fapi/v1/order", {
-        "symbol": symbol,
-        "side": side,
-        "type": "MARKET",
-        "quantity": quantity
-        "newOrderRespType": "FULL"    # 체결 정보(fills) 포함 요청
-    })
-
+    # newOrderRespType="FULL"을 써야 resp["fills"]가 반환됩니다.
+    return send_signed_request(
+        "POST",
+        "/fapi/v1/order",
+        {
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "quantity": quantity,
+            "newOrderRespType": "FULL"
+        }
+    )
 def cancel_all_orders(symbol):
     return send_signed_request("DELETE", "/fapi/v1/allOpenOrders", {
         "symbol": symbol
@@ -77,12 +81,16 @@ def cancel_all_orders(symbol):
 
 # binance_api.py 안에 추가
 def place_market_exit(symbol, side, quantity):
-     # 마켓 청산도 FULL 응답으로 체결 정보 받기
-+    return send_signed_request("POST", "/fapi/v1/order", {
-+        "symbol": symbol,
-+        "side": side,
-+        "type": "MARKET",
-+        "quantity": quantity,
-+        "newOrderRespType": "FULL"
-})
+    # 청산도 FULL 응답으로 체결 정보 받도록 직접 호출
+    return send_signed_request(
+        "POST",
+        "/fapi/v1/order",
+        {
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "quantity": quantity,
+            "newOrderRespType": "FULL"
+        }
+    )
 
