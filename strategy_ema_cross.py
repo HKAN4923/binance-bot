@@ -2,7 +2,13 @@
 from datetime import datetime, timedelta
 from binance_api import get_price, get_klines, place_market_order, place_market_exit
 from position_manager import can_enter, add_position, remove_position, open_positions
-from utils import calculate_tp_sl, log_trade, now_string
+from utils import (
+    calculate_tp_sl,
+    log_trade,
+    now_string,
+    calculate_order_quantity,
+    extract_entry_price,
+)
 from risk_config import EMA_TP_PERCENT, EMA_SL_PERCENT
 from utils import calculate_order_quantity
 
@@ -51,7 +57,6 @@ def check_entry(symbol):
 
     qty = calculate_order_quantity(symbol)
     resp = place_market_order(symbol, side, qty)
-
     entry_price = float(resp["fills"][0]["price"])
 
     add_position(symbol, entry_price, "ema", direction, qty)

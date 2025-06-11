@@ -70,3 +70,21 @@ def calculate_order_quantity(symbol):
     raw_qty = usdt_to_use / price
     step = get_step_size(symbol)
     return round_quantity(raw_qty, step)
+
+def extract_entry_price(resp):
+    """Return executed price from a Binance order response.
+
+    If no price information is available, returns ``None``.
+    """
+    try:
+        if resp is None:
+            return None
+        if "fills" in resp and resp["fills"]:
+            return float(resp["fills"][0]["price"])
+        if "avgPrice" in resp and resp["avgPrice"] not in (None, "", "0"):
+            return float(resp["avgPrice"])
+        if "price" in resp and resp["price"] not in (None, "", "0"):
+            return float(resp["price"])
+    except (KeyError, TypeError, ValueError):
+        pass
+    return None

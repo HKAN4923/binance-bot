@@ -2,7 +2,13 @@
 from datetime import datetime, timedelta
 from binance_api import get_price, get_klines, place_market_order, place_market_exit
 from position_manager import can_enter, add_position, remove_position, open_positions
-from utils import calculate_tp_sl, log_trade, now_string
+from utils import (
+    calculate_tp_sl,
+    log_trade,
+    now_string,
+    calculate_order_quantity,
+    extract_entry_price,
+)
 from risk_config import ORB_TP_PERCENT, ORB_SL_PERCENT, ORB_TIMECUT_HOURS
 from utils import calculate_order_quantity
 
