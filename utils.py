@@ -1,90 +1,142 @@
 # utils.py
 import os
-import json
 import csv
-from datetime import datetime, timedelta
-from risk_config import *
 import math
+from datetime import datetime, timedelta
 import requests
-
-# utils.py
-
 from binance_api import get_balance, get_price
 from risk_config import POSITION_RATIO, LEVERAGE
 
-def calculate_order_quantity(symbol):
+# --- Exchange info caching for symbol filters ---
+_EXCHANGE_INFO = None
+
+def _load_exchange_info():
+    global _EXCHANGE_INFO
+    if _EXCHANGE_INFO is None:
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        _EXCHANGE_INFO = requests.get(url).json()
+    return _EXCHANGE_INFO
+
+def _get_symbol_filters(symbol: str) -> list:
+    info = _load_exchange_info()
+    for s in info.get("symbols", []):
+        if s.get("symbol") == symbol:
+            return s.get("filters", [])
+    return []
+
+# --- Step size, min qty, min notional ---
+def get_step_size(symbol: str) -> float:
+    for f in _get_symbol_filters(symbol):
+        if f.get("filterType") in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+            return float(f.get("stepSize", 0))
+    return 0.0
+
+def get_min_qty(symbol: str) -> float:
+    for f in _get_symbol_filters(symbol):
+        if f.get("filterType") in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+            return float(f.get("minQty", 0))
+    return 0.0
+
+def get_min_notional(symbol: str) -> float:
+    for f in _get_symbol_filters(symbol):
+        if f.get("filterType") == "MIN_NOTIONAL":
+            return float(f.get("minNotional", 0))
+    return 0.0
+
+# --- Quantity rounding ---
+def round_quantity(qty: float, step_size: float) -> float:
+    """
+    Round down to nearest step_size.
+    """
+    if step_size <= 0:
+        return 0.0
+    precision = int(round(-math.log10(step_size)))
+    floored = math.floor(qty / step_size) * step_size
+    return round(floored, precision)
+
+# --- Order quantity calculation ---
+def calculate_order_quantity(symbol: str) -> float:
+    """
+    Calculate order quantity based on balance, leverage, position ratio.
+    Ensures step size, min quantity, and min notional requirements.
+    Returns 0.0 if requirements not met.
+    """
     balance = get_balance()
     usdt_to_use = balance * POSITION_RATIO * LEVERAGE
     price = get_price(symbol)
-    qty = usdt_to_use / price
-    return round(qty, 3)  # 종목별로 precision 조정 가능
 
-def utc_to_kst(utc_dt):
+    # raw quantity in units
+    raw_qty = usdt_to_use / price if price > 0 else 0.0
+    step = get_step_size(symbol)
+    min_qty = get_min_qty(symbol)
+    min_notional = get_min_notional(symbol)
+
+    qty = round_quantity(raw_qty, step)
+
+    # Requirements
+    if qty < min_qty:
+        return 0.0
+    if min_notional and qty * price < min_notional:
+        return 0.0
+    return qty
+
+# --- Time utilities ---
+def utc_to_kst(utc_dt: datetime) -> datetime:
     return utc_dt + timedelta(hours=9)
 
-def now_string():
+def now_string() -> str:
     return utc_to_kst(datetime.utcnow()).strftime('%Y-%m-%d %H:%M:%S')
 
-def calculate_tp_sl(entry_price, tp_percent, sl_percent, side):
+# --- TP/SL calculation ---
+def calculate_tp_sl(entry_price: float, tp_percent: float, sl_percent: float, side: str):
     if side == "long":
         tp = entry_price * (1 + tp_percent / 100)
         sl = entry_price * (1 - sl_percent / 100)
-    else:  # short
+    else:
         tp = entry_price * (1 - tp_percent / 100)
         sl = entry_price * (1 + sl_percent / 100)
     return round(tp, 4), round(sl, 4)
 
+# --- Logging trades ---
 def log_trade(data: dict, file_path='trade_log.csv'):
     file_exists = os.path.isfile(file_path)
-    with open(file_path, mode='a', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=data.keys())
+    with open(file_path, mode='a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=data.keys())
         if not file_exists:
             writer.writeheader()
         writer.writerow(data)
 
-def calculate_slippage(expected_price, actual_price):
+# --- Slippage calculation ---
+def calculate_slippage(expected_price: float, actual_price: float) -> float:
     return round(abs(expected_price - actual_price) / expected_price * 100, 3)
 
-# utils.py에 추가
-
-
-def get_step_size(symbol):
-    url = f"https://fapi.binance.com/fapi/v1/exchangeInfo"
-    res = requests.get(url).json()
-    for s in res['symbols']:
-        if s['symbol'] == symbol:
-            for f in s['filters']:
-                if f['filterType'] == 'LOT_SIZE':
-                    step_size = float(f['stepSize'])
-                    return step_size
-    return 0.001  # fallback
-
-def round_quantity(qty, step_size):
-    precision = int(round(-math.log10(step_size)))
-    return round(qty, precision)
-
-def calculate_order_quantity(symbol):
-    balance = get_balance()
-    usdt_to_use = balance * POSITION_RATIO * LEVERAGE
-    price = get_price(symbol)
-    raw_qty = usdt_to_use / price
-    step = get_step_size(symbol)
-    return round_quantity(raw_qty, step)
-
-def extract_entry_price(resp):
-    """Return executed price from a Binance order response.
-
-    If no price information is available, returns ``None``.
+# --- Extract entry price safely ---
+def extract_entry_price(resp: dict) -> float | None:
     """
-    try:
-        if resp is None:
-            return None
-        if "fills" in resp and resp["fills"]:
-            return float(resp["fills"][0]["price"])
-        if "avgPrice" in resp and resp["avgPrice"] not in (None, "", "0"):
-            return float(resp["avgPrice"])
-        if "price" in resp and resp["price"] not in (None, "", "0"):
-            return float(resp["price"])
-    except (KeyError, TypeError, ValueError):
-        pass
+    Return executed price from Binance order response safely.
+    Checks 'fills', 'avgPrice', 'price' without raising errors.
+    """
+    if not isinstance(resp, dict):
+        return None
+    # fills first
+    fills = resp.get('fills')
+    if isinstance(fills, list) and fills:
+        try:
+            return float(fills[0].get('price', 0))
+        except (TypeError, ValueError):
+            pass
+    # avgPrice fallback
+    avg = resp.get('avgPrice')
+    if avg not in (None, '', '0'):
+        try:
+            return float(avg)
+        except (TypeError, ValueError):
+            pass
+    # price fallback
+    pr = resp.get('price')
+    if pr not in (None, '', '0'):
+        try:
+            return float(pr)
+        except (TypeError, ValueError):
+            pass
     return None
