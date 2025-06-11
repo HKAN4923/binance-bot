@@ -8,6 +8,8 @@ from position_manager import open_positions
 from telegram_bot import send_telegram
 from binance_api import get_price
 from utils import now_string
+from risk_config import MAX_POSITION_COUNT
+
 
 SYMBOL_LIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]  # 기본 심볼 리스트
 
