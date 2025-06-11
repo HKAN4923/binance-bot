@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 # .env에서 API 키 및 시크릿 불러오기
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
-API_SECRET = os.getenv("BINANCE_SECRET_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
 BASE_URL = "https://fapi.binance.com"
 
 
