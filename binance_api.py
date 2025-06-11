@@ -9,6 +9,7 @@ Binance Futures REST API wrapper
 - get_price: 현재가 조회
 - get_account_info: 계정 정보 조회
 - get_position: 특정 심볼 포지션 조회
+- get_balance: USDT 잔고 조회
 """
 import os
 import time
@@ -145,3 +146,14 @@ def get_position(symbol: str) -> dict:
         if pos.get("symbol") == symbol:
             return pos
     return {}
+
+
+def get_balance() -> float:
+    """
+    USDT Futures 계정 잔고(availableBalance) 조회
+    """
+    account = get_account_info()
+    for asset in account.get("assets", []):
+        if asset.get("asset") == "USDT":
+            return float(asset.get("availableBalance", 0.0))
+    return 0.0
