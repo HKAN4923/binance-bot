@@ -61,7 +61,7 @@ def send_signed_request(http_method: str, endpoint: str, params: dict) -> dict:
     - endpoint: 예) "/fapi/v1/order"
     - params: 요청 파라미터
     """
-     params.update({
+    params.update({
         "timestamp": _get_timestamp_ms(),
         "recvWindow": 5000
     })
