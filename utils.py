@@ -4,6 +4,17 @@ import json
 import csv
 from datetime import datetime, timedelta
 from risk_config import *
+# utils.py
+
+from binance_api import get_balance, get_price
+from risk_config import POSITION_RATIO, LEVERAGE
+
+def calculate_order_quantity(symbol):
+    balance = get_balance()
+    usdt_to_use = balance * POSITION_RATIO * LEVERAGE
+    price = get_price(symbol)
+    qty = usdt_to_use / price
+    return round(qty, 3)  # 종목별로 precision 조정 가능
 
 def utc_to_kst(utc_dt):
     return utc_dt + timedelta(hours=9)

@@ -4,6 +4,7 @@ from binance_api import get_price, get_klines, place_market_order, place_market_
 from position_manager import can_enter, add_position, remove_position, open_positions
 from utils import calculate_tp_sl, log_trade, now_string
 from risk_config import NR7_TP_PERCENT, NR7_SL_PERCENT, NR7_TIMECUT_HOURS
+from utils import calculate_order_quantity
 
 def is_entry_time_kst():
     now = datetime.utcnow() + timedelta(hours=9)
@@ -36,7 +37,7 @@ def check_entry(symbol):
     else:
         return
 
-    qty = 10  # TODO: 수량 계산 함수로 교체
+    qty = calculate_order_quantity(symbol)
     resp = place_market_order(symbol, side, qty)
     entry_price = float(resp["fills"][0]["price"])
 

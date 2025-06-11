@@ -4,6 +4,7 @@ from binance_api import get_price, get_klines, place_market_order, place_market_
 from position_manager import can_enter, add_position, remove_position, open_positions
 from utils import calculate_tp_sl, log_trade, now_string
 from risk_config import EMA_TP_PERCENT, EMA_SL_PERCENT
+from utils import calculate_order_quantity
 
 def calculate_ema(values, length):
     k = 2 / (length + 1)
@@ -48,7 +49,7 @@ def check_entry(symbol):
     else:
         return
 
-    qty = 10
+    qty = calculate_order_quantity(symbol)
     resp = place_market_order(symbol, side, qty)
     entry_price = float(resp["fills"][0]["price"])
 
