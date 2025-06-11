@@ -24,10 +24,20 @@ API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 BASE_URL = "https://fapi.binance.com"
 
-
-def _get_timestamp_ms():
-    """현재 시간(밀리초) 반환"""
-    return int(time.time() * 1000)
++def get_server_time() -> int:
++    """바이낸스 서버 시간(ms) 조회"""
++    url = BASE_URL + "/fapi/v1/time"
++    resp = requests.get(url)
++    resp.raise_for_status()
++    return resp.json()["serverTime"]
++
++def _get_timestamp_ms():
++    """서버 시간 기준 timestamp(ms) 반환 (동기화)"""
++    try:
++        return get_server_time()
++    except Exception:
++        # 서버 조회 실패 시 로컬 시간 fallback
++        return int(time.time() * 1000)
 
 
 def _sign_payload(params: dict) -> dict:
@@ -51,7 +61,11 @@ def send_signed_request(http_method: str, endpoint: str, params: dict) -> dict:
     - endpoint: 예) "/fapi/v1/order"
     - params: 요청 파라미터
     """
-    params.update({"timestamp": _get_timestamp_ms()})
+     params.update({
++        "timestamp": _get_timestamp_ms(),
++        "recvWindow": 5000
++    })
+    
     signed_params = _sign_payload(params)
     headers = {"X-MBX-APIKEY": API_KEY}
     url = BASE_URL + endpoint
