@@ -37,7 +37,7 @@ def check_entry(symbol):
     resp = place_market_order(symbol, side, qty)
     entry_price = float(resp["fills"][0]["price"])
 
-    add_position(symbol, entry_price, "pullback", direction)
+    add_position(symbol, entry_price, "pullback", direction, qty)
     tp, sl = calculate_tp_sl(entry_price, PULLBACK_TP_PERCENT, PULLBACK_SL_PERCENT, direction)
 
     log_trade({
@@ -72,7 +72,8 @@ def check_exit(symbol):
         should_exit = True
 
     if should_exit:
-        place_market_exit(symbol, "SELL" if side == "long" else "BUY", 10)
+        qty = pos["position_size"]
+        place_market_exit(symbol, "SELL" if side == "long" else "BUY", qty)
         remove_position(symbol)
 
         log_trade({

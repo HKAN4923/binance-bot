@@ -11,6 +11,7 @@ from utils import now_string
 from risk_config import MAX_POSITION_COUNT
 
 
+
 SYMBOL_LIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]  # 기본 심볼 리스트
 
 def run_all_entries():
