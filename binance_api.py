@@ -3,6 +3,7 @@
 Binance Futures REST API wrapper
 - send_signed_request: 서명된 요청 전송
 - public_request: 퍼블릭 엔드포인트 요청
+- get_klines: 캔들스틱(klines) 데이터 조회
 - place_market_order: 시장가 주문 (FULL 응답)
 - place_market_exit: 청산 주문
 - get_price: 현재가 조회
@@ -33,9 +34,7 @@ def _sign_payload(params: dict) -> dict:
     """
     HMAC SHA256 서명 생성 후 payload에 signature를 추가
     """
-    # 파라미터 정렬 및 쿼리 스트링 생성
     query_string = '&'.join([f"{key}={value}" for key, value in sorted(params.items())])
-    # 시그니처 계산
     signature = hmac.new(
         API_SECRET.encode('utf-8'),
         query_string.encode('utf-8'),
@@ -52,13 +51,10 @@ def send_signed_request(http_method: str, endpoint: str, params: dict) -> dict:
     - endpoint: 예) "/fapi/v1/order"
     - params: 요청 파라미터
     """
-    # 타임스탬프 추가
     params.update({"timestamp": _get_timestamp_ms()})
-    # 시그니처 생성
     signed_params = _sign_payload(params)
     headers = {"X-MBX-APIKEY": API_KEY}
     url = BASE_URL + endpoint
-    # 요청 전송
     if http_method.upper() == "GET":
         response = requests.get(url, headers=headers, params=signed_params)
     else:
@@ -77,6 +73,19 @@ def public_request(endpoint: str, params: dict = None) -> dict:
     response = requests.get(url, params=params)
     response.raise_for_status()
     return response.json()
+
+
+def get_klines(symbol: str, interval: str, limit: int = 500) -> list:
+    """
+    과거 캔들스틱(klines) 데이터 조회
+    - symbol: 거래쌍 (예: "BTCUSDT")
+    - interval: 캔들 간격 (예: "1h", "15m")
+    - limit: 가져올 데이터 개수 (최대 1000)
+    """
+    return public_request(
+        "/fapi/v1/klines",
+        {"symbol": symbol, "interval": interval, "limit": limit}
+    )
 
 
 def place_market_order(symbol: str, side: str, quantity: float) -> dict:
