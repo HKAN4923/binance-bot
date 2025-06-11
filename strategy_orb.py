@@ -10,7 +10,6 @@ from utils import (
     extract_entry_price,
 )
 from risk_config import ORB_TP_PERCENT, ORB_SL_PERCENT, ORB_TIMECUT_HOURS
-from utils import calculate_order_quantity
 
 def is_entry_time_kst():
     now = datetime.utcnow() + timedelta(hours=9)
@@ -21,7 +20,7 @@ def check_entry(symbol):
         return
 
     klines = get_klines(symbol, interval="1h", limit=2)
-    opening_candle = klines[-2]  # 이전 1시간봉
+    opening_candle = klines[-2]
     open_high = float(opening_candle[2])
     open_low = float(opening_candle[3])
     price = get_price(symbol)
@@ -33,11 +32,18 @@ def check_entry(symbol):
         side = "SELL"
         direction = "short"
     else:
-        return  # 돌파 안됨
+        return
 
     qty = calculate_order_quantity(symbol)
+    if qty <= 0:
+        print(f"[ORB] {symbol} 주문 스킵: 수량(qty)={qty}")
+        return
+
     resp = place_market_order(symbol, side, qty)
-    entry_price = float(resp["fills"][0]["price"])
+    entry_price = extract_entry_price(resp)
+    if entry_price is None:
+        print(f"[ORB] {symbol} 주문 실패: {resp}")
+        return
 
     add_position(symbol, entry_price, "orb", direction, qty)
     tp, sl = calculate_tp_sl(entry_price, ORB_TP_PERCENT, ORB_SL_PERCENT, direction)

@@ -10,7 +10,6 @@ from utils import (
     extract_entry_price,
 )
 from risk_config import NR7_TP_PERCENT, NR7_SL_PERCENT, NR7_TIMECUT_HOURS
-from utils import calculate_order_quantity
 
 def is_entry_time_kst():
     now = datetime.utcnow() + timedelta(hours=9)
@@ -24,9 +23,9 @@ def check_entry(symbol):
     if len(klines) < 8:
         return
 
-    ranges = [(float(k[2]) - float(k[3])) for k in klines[:-1]]  # 마지막은 오늘
+    ranges = [(float(k[2]) - float(k[3])) for k in klines[:-1]]
     min_range_index = ranges.index(min(ranges))
-    if min_range_index != 6:  # 바로 전날이 NR7이어야 함
+    if min_range_index != 6:
         return
 
     prev_kline = klines[-2]
@@ -44,8 +43,15 @@ def check_entry(symbol):
         return
 
     qty = calculate_order_quantity(symbol)
+    if qty <= 0:
+        print(f"[NR7] {symbol} 주문 스킵: 수량(qty)={qty}")
+        return
+
     resp = place_market_order(symbol, side, qty)
-    entry_price = float(resp["fills"][0]["price"])
+    entry_price = extract_entry_price(resp)
+    if entry_price is None:
+        print(f"[NR7] {symbol} 주문 실패: {resp}")
+        return
 
     add_position(symbol, entry_price, "nr7", direction, qty)
     tp, sl = calculate_tp_sl(entry_price, NR7_TP_PERCENT, NR7_SL_PERCENT, direction)

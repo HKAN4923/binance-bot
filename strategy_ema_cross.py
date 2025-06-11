@@ -10,7 +10,6 @@ from utils import (
     extract_entry_price,
 )
 from risk_config import EMA_TP_PERCENT, EMA_SL_PERCENT
-from utils import calculate_order_quantity
 
 def calculate_ema(values, length):
     k = 2 / (length + 1)
@@ -23,10 +22,8 @@ def calculate_rsi(values, period=14):
     deltas = [values[i+1] - values[i] for i in range(len(values)-1)]
     gains = [d for d in deltas if d > 0]
     losses = [-d for d in deltas if d < 0]
-
     avg_gain = sum(gains[-period:]) / period if gains else 0
     avg_loss = sum(losses[-period:]) / period if losses else 0
-
     if avg_loss == 0:
         return 100
     rs = avg_gain / avg_loss
@@ -42,7 +39,6 @@ def check_entry(symbol):
     ema21_prev = calculate_ema(closes[-21:-1], 21)
     ema9_now = calculate_ema(closes[-20:], 9)
     ema21_now = calculate_ema(closes[-20:], 21)
-
     rsi = calculate_rsi(closes[-15:], 14)
     price = closes[-1]
 
@@ -56,8 +52,15 @@ def check_entry(symbol):
         return
 
     qty = calculate_order_quantity(symbol)
+    if qty <= 0:
+        print(f"[EMA] {symbol} 주문 스킵: 수량(qty)={qty}")
+        return
+
     resp = place_market_order(symbol, side, qty)
-    entry_price = float(resp["fills"][0]["price"])
+    entry_price = extract_entry_price(resp)
+    if entry_price is None:
+        print(f"[EMA] {symbol} 주문 실패: {resp}")
+        return
 
     add_position(symbol, entry_price, "ema", direction, qty)
     tp, sl = calculate_tp_sl(entry_price, EMA_TP_PERCENT, EMA_SL_PERCENT, direction)

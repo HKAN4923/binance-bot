@@ -16,10 +16,9 @@ import time
 import hmac
 import hashlib
 import requests
-
+from requests.exceptions import HTTPError
 from dotenv import load_dotenv
 
-# .env에서 API 키 및 시크릿 불러오기
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
@@ -94,17 +93,26 @@ def place_market_order(symbol: str, side: str, quantity: float) -> dict:
     시장가 주문
     - newOrderRespType="FULL" 로 체결 정보(fills) 포함 요청
     """
-    return send_signed_request(
-        "POST",
-        "/fapi/v1/order",
-        {
-            "symbol": symbol,
-            "side": side,
-            "type": "MARKET",
-            "quantity": quantity,
-            "newOrderRespType": "FULL"
-        }
-    )
+    try:
+        return send_signed_request(
+            "POST",
+            "/fapi/v1/order",
+            {
+                "symbol": symbol,
+                "side": side,
+                "type": "MARKET",
+                "quantity": quantity,
+                "newOrderRespType": "FULL"
+            }
+        )
+    except HTTPError as e:
+        # 에러 메시지 JSON 파싱 시도
+        try:
+            err = e.response.json()
+        except Exception:
+            err = {"error": str(e)}
+        print(f"[Order Error] symbol={symbol}, side={side}, qty={quantity} → {err}")
+        return err
 
 
 def place_market_exit(symbol: str, side: str, quantity: float) -> dict:

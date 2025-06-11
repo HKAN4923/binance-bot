@@ -11,7 +11,6 @@ from utils import (
 )
 from risk_config import PULLBACK_TP_PERCENT, PULLBACK_SL_PERCENT
 
-
 def calculate_ema(values, length):
     k = 2 / (length + 1)
     ema = values[0]
@@ -29,7 +28,6 @@ def check_entry(symbol):
     price = closes[-1]
     prev_price = closes[-2]
 
-    # 간단한 눌림 반등 조건: 이전봉 < EMA < 현재봉
     if prev_price < ema21 < price:
         direction = "long"
         side = "BUY"
@@ -40,10 +38,14 @@ def check_entry(symbol):
         return
 
     qty = calculate_order_quantity(symbol)
+    if qty <= 0:
+        print(f"[Pullback] {symbol} 주문 스킵: 수량(qty)={qty}")
+        return
+
     resp = place_market_order(symbol, side, qty)
     entry_price = extract_entry_price(resp)
     if entry_price is None:
-        print(f"Order failed for {symbol}: {resp}")
+        print(f"[Pullback] {symbol} 주문 실패: {resp}")
         return
 
     add_position(symbol, entry_price, "pullback", direction, qty)
