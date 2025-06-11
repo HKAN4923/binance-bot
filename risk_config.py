@@ -2,18 +2,18 @@
 # 모든 전략에서 사용할 공통 리스크 및 설정값 정의
 
 # === 기본 거래 설정 ===
-LEVERAGE = 1  # 기본 레버리지 (전략별로 바꿀 수 있음)
+LEVERAGE = 5  # 기본 레버리지 (전략별로 바꿀 수 있음)
 POSITION_RATIO = 0.2  # 자산의 20%만 진입
 
 # === ORB 전략 설정 ===
 ORB_TP_PERCENT = 2.0  # 익절 2%
 ORB_SL_PERCENT = 1.0  # 손절 1%
-ORB_TIMECUT_HOURS = 3  # 3시간 후 무조건 청산
+ORB_TIMECUT_HOURS = 2  # 3시간 후 무조건 청산
 
 # === NR7 전략 설정 ===
 NR7_TP_PERCENT = 1.8
 NR7_SL_PERCENT = 0.9
-NR7_TIMECUT_HOURS = 3
+NR7_TIMECUT_HOURS = 2
 
 # === PULLBACK 전략 설정 ===
 PULLBACK_TP_PERCENT = 1.2
