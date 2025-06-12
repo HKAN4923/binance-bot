@@ -55,26 +55,27 @@ def _sign_payload(params: dict) -> dict:
 
 
 def send_signed_request(http_method: str, endpoint: str, params: dict) -> dict:
-    """
-    서명된 요청을 바이낸스 선물 API로 전송
-    - http_method: "GET", "POST" 등
-    - endpoint: 예) "/fapi/v1/order"
-    - params: 요청 파라미터
-    """
     params.update({
         "timestamp": _get_timestamp_ms(),
         "recvWindow": 5000
     })
-    
+
     signed_params = _sign_payload(params)
     headers = {"X-MBX-APIKEY": API_KEY}
     url = BASE_URL + endpoint
-    if http_method.upper() == "GET":
-        response = requests.get(url, headers=headers, params=signed_params)
-    else:
-        response = requests.request(http_method.upper(), url, headers=headers, params=signed_params)
-    response.raise_for_status()
-    return response.json()
+    try:
+        if http_method.upper() == "GET":
+            response = requests.get(url, headers=headers, params=signed_params)
+        else:
+            response = requests.request(http_method.upper(), url, headers=headers, params=signed_params)
+        response.raise_for_status()
+        return response.json()
+    except HTTPError as e:
+        try:
+            print("[Binance 응답]", e.response.json())  # 👉 여기가 핵심!
+        except:
+            print("[Binance 오류]", e)
+        raise  # 다시 예외 발생시켜서 로그에 표시
 
 
 def public_request(endpoint: str, params: dict = None) -> dict:
