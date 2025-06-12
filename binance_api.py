@@ -3,6 +3,20 @@
 Binance Futures REST API wrapper
 - 서명된 요청 처리 및 주요 엔드포인트 호출 함수 정의
 """
+load_dotenv(dotenv_path="./.env")
+
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
+
+if not API_SECRET:
+    raise ValueError("❌ API_SECRET가 .env에서 로드되지 않았습니다.")
+
+if not isinstance(API_SECRET, str):
+    raise TypeError("❌ API_SECRET는 str 타입이어야 합니다.")
+
+# 인코딩은 여기서 수행
+API_SECRET = API_SECRET.encode('utf-8')
+
 
 import os
 import time
