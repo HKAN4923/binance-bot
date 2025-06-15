@@ -1,23 +1,25 @@
-from binance_api import client
+from risk_config import MAX_POSITION_COUNT
+open_positions = {}
+
+def can_enter(symbol, strategy):
+    return len(open_positions) < MAX_POSITION_COUNT and symbol not in open_positions
+
+def add_position(symbol, entry_price, strategy, side, qty):
+    from datetime import datetime
+    open_positions[symbol] = {
+        "entry_price": entry_price,
+        "strategy": strategy,
+        "side": side,
+        "position_size": qty,
+        "entry_time": datetime.utcnow()
+    }
+
+def remove_position(symbol):
+    if symbol in open_positions:
+        del open_positions[symbol]
+
+def get_position(symbol):
+    return open_positions.get(symbol)
 
 def get_open_position_count():
-    try:
-        positions = client.futures_position_information()
-        count = sum(
-            1 for p in positions if float(p["positionAmt"]) != 0 and p["symbol"].endswith("USDT")
-        )
-        return count
-    except Exception as e:
-        print(f"[ERROR] get_open_position_count: {e}")
-        return 0
-
-def can_enter(symbol):
-    try:
-        positions = client.futures_position_information()
-        for p in positions:
-            if p["symbol"] == symbol and float(p["positionAmt"]) != 0:
-                return False
-        return True
-    except Exception as e:
-        print(f"[ERROR] can_enter({symbol}): {e}")
-        return False
+    return len(open_positions)
