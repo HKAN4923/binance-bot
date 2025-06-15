@@ -39,10 +39,8 @@ def get_server_time() -> int:
     return resp.json()["serverTime"]
 
 def _get_timestamp_ms():
-    try:
-        return get_server_time()
-    except:
-        return int(time.time() * 1000)
+    return get_server_time()  # 무조건 서버 시간 사용
+
 
 def _sign_payload(params: dict) -> dict:
     query_string = '&'.join([f"{key}={value}" for key, value in sorted(params.items())])
