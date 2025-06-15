@@ -1,4 +1,4 @@
-from position_manager import open_positions
+from position_manager import open_positions, MAX_POSITION_COUNT
 
 def summarize_trades():
     try:
@@ -13,7 +13,7 @@ def summarize_trades():
 
 def print_open_positions():
     pos_count = len(open_positions)
-    print(f"분석중...({pos_count}/5)")
+    print(f"분석중...({pos_count}/{MAX_POSITION_COUNT})")
     if pos_count > 0:
         for sym, pos in open_positions.items():
             print(f"{sym}: {pos['side']} @ {pos['entry_price']} [{pos['strategy']}]")

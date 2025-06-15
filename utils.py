@@ -15,7 +15,8 @@ def calculate_order_quantity(symbol):
             return 0
 
         balance = get_futures_balance()
-        order_value = balance * POSITION_RATIO * LEVERAGE
+        base_value = balance * POSITION_RATIO
+        order_value = base_value * LEVERAGE  # 최종 포지션 금액
         qty = order_value / price
 
         step_size = get_lot_size(symbol)
