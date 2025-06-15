@@ -3,9 +3,9 @@ from strategy_nr7 import check_entry as nr7_entry, check_exit as nr7_exit
 from strategy_pullback import check_entry as pullback_entry, check_exit as pullback_exit
 from strategy_ema_cross import check_entry as ema_entry, check_exit as ema_exit
 from trade_summary import print_open_positions
+from position_manager import get_open_position_count
 import time
 
-# 선물에서 안정적으로 거래되는 대표 심볼 50~100개
 SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "AVAXUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "DOTUSDT", "LINKUSDT",
     "MATICUSDT", "LTCUSDT", "BCHUSDT", "INJUSDT", "APTUSDT", "ARBUSDT", "OPUSDT", "IMXUSDT", "SUIUSDT", "RNDRUSDT",
@@ -15,7 +15,14 @@ SYMBOLS = [
 ]
 
 def run_all_entries():
+    open_pos = get_open_position_count()
+    max_pos = 4
+    if open_pos >= max_pos:
+        print(f"분석중...({open_pos}/{max_pos})")
+        return
     for sym in SYMBOLS:
+        if get_open_position_count() >= max_pos:
+            break
         orb_entry(sym)
         nr7_entry(sym)
         pullback_entry(sym)
