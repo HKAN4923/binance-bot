@@ -12,10 +12,13 @@ client = Client(os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_API_SECRET"))
 
 def load_symbols(top_n=50):
     try:
-        tickers = client.futures_ticker_price()
-        usdt_pairs = [t for t in tickers if t["symbol"].endswith("USDT") and not t["symbol"].endswith("BUSD")]
-        symbols = sorted([t["symbol"] for t in usdt_pairs])[:top_n]
-        print(f"[INFO] 상위 {top_n}개 심볼 로딩 완료")
+        info = client.futures_exchange_info()
+        symbols = [
+            s["symbol"] for s in info["symbols"]
+            if s["contractType"] == "PERPETUAL" and s["symbol"].endswith("USDT")
+        ]
+        symbols = sorted(symbols)[:top_n]
+        print(f"[INFO] {len(symbols)}개 선물 심볼 로딩 완료")
         return symbols
     except Exception as e:
         print(f"[ERROR] 심볼 로딩 실패: {e}")
