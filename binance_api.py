@@ -13,10 +13,13 @@ from requests.exceptions import HTTPError
 from dotenv import load_dotenv
 
 # ✅ .env 파일 로드
-load_dotenv(dotenv_path="./.env")
+from pathlib import Path
+env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
-API_KEY = os.getenv("BINANCE_API_KEY")
-API_SECRET_RAW = os.getenv("BINANCE_API_SECRET")
+API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
+API_SECRET_RAW = os.getenv("BINANCE_API_SECRET", "").strip()
+API_SECRET = API_SECRET_RAW.encode("utf-8")
 
 if not API_KEY or not API_SECRET_RAW:
     raise ValueError("❌ .env에서 API 키 또는 시크릿이 누락되었습니다.")
@@ -43,6 +46,7 @@ def _get_timestamp_ms():
 
 def _sign_payload(params: dict) -> dict:
     query_string = '&'.join([f"{key}={value}" for key, value in sorted(params.items())])
+    print("[DEBUG] Signing:", query_string)
     signature = hmac.new(
         API_SECRET,
         query_string.encode("utf-8"),
