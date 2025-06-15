@@ -15,7 +15,7 @@ def calculate_order_quantity(symbol):
             return 0
 
         balance = get_futures_balance()
-        order_value = balance * POSITION_RATIO*LEVERAGE
+        order_value = balance * POSITION_RATIO * LEVERAGE
         qty = order_value / price
 
         step_size = get_lot_size(symbol)
@@ -42,9 +42,13 @@ def calculate_order_quantity(symbol):
 
 def extract_entry_price(order_resp):
     try:
-        if not order_resp or "avgFillPrice" not in order_resp:
+        if not order_resp:
+            print("[ERROR] 주문 응답 없음")
             return None
-        return float(order_resp["avgFillPrice"])
+        if float(order_resp.get("executedQty", 0)) == 0:
+            print(f"[실패] 주문 체결 안됨: executedQty == 0")
+            return None
+        return float(order_resp.get("avgFillPrice", 0))
     except Exception as e:
         print(f"[ERROR] extract_entry_price: {e}")
         return None
