@@ -12,6 +12,8 @@ def summarize_trades():
         print("트레이드 로그 없음")
 
 def print_open_positions():
-    print(f"분석중...({len(open_positions)}/5)")
-    for sym, pos in open_positions.items():
-        print(f"{sym}: {pos}")
+    pos_count = len(open_positions)
+    print(f"분석중...({pos_count}/5)")
+    if pos_count > 0:
+        for sym, pos in open_positions.items():
+            print(f"{sym}: {pos['side']} @ {pos['entry_price']} [{pos['strategy']}]")

@@ -11,7 +11,7 @@ def calculate_order_quantity(symbol):
     try:
         price = get_price(symbol)
         if price is None or price == 0:
-            print(f"[ERROR] {symbol} 가격 조회 실패 또는 0")
+            print(f"[{symbol}] 가격 조회 실패")
             return 0
 
         balance = get_futures_balance()
@@ -20,7 +20,7 @@ def calculate_order_quantity(symbol):
 
         step_size = get_lot_size(symbol)
         if step_size is None:
-            print(f"[ERROR] {symbol} stepSize 조회 실패")
+            print(f"[{symbol}] 최소 수량 정보 없음")
             return 0
 
         precision = abs(int(round(-1 * math.log10(step_size))))
@@ -28,29 +28,29 @@ def calculate_order_quantity(symbol):
         notional = final_qty * price
 
         if final_qty < step_size:
-            print(f"[SKIP] {symbol} 주문 수량({final_qty})이 최소 수량({step_size})보다 작음")
+            print(f"[{symbol}] 수량 부족 → {final_qty} < {step_size}")
             return 0
 
         if notional < 20:
-            print(f"[SKIP] {symbol} 주문 금액 ${notional:.2f} < 최소 $20")
+            print(f"[{symbol}] 금액 부족 → ${notional:.2f} < $20")
             return 0
 
         return final_qty
     except Exception as e:
-        print(f"[ERROR] calculate_order_quantity: {e}")
+        print(f"[{symbol}] 수량 계산 오류: {e}")
         return 0
 
 def extract_entry_price(order_resp):
     try:
         if not order_resp:
-            print("[ERROR] 주문 응답 없음")
+            print("[주문 실패] 응답 없음")
             return None
         if float(order_resp.get("executedQty", 0)) == 0:
-            print(f"[실패] 주문 체결 안됨: executedQty == 0")
+            print("[주문 실패] 체결되지 않음 (executedQty = 0)")
             return None
         return float(order_resp.get("avgFillPrice", 0))
     except Exception as e:
-        print(f"[ERROR] extract_entry_price: {e}")
+        print(f"[extract_entry_price 오류] {e}")
         return None
 
 def log_trade(data):
@@ -58,7 +58,7 @@ def log_trade(data):
         with open("trades.log", "a") as f:
             f.write(str(data) + "\n")
     except Exception as e:
-        print(f"[ERROR] log_trade: {e}")
+        print(f"[로그 저장 오류] {e}")
 
 def now_string():
     import datetime
