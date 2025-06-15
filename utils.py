@@ -18,7 +18,7 @@ def calculate_qty(balance: float, price: float, leverage: int, fraction: float, 
     return float(qty)
 
 def get_top_100_volume_symbols():
-    from binance_client import client
+    from binance_api import client
     try:
         stats_24h = client.futures_ticker()
         usdt_pairs = [
@@ -32,7 +32,7 @@ def get_top_100_volume_symbols():
         return []
 
 def get_tradable_futures_symbols():
-    from binance_client import client
+    from binance_api import client
     try:
         exchange_info = client.futures_exchange_info()
         symbols = [
@@ -45,7 +45,7 @@ def get_tradable_futures_symbols():
         return []
 
 def get_tick_size(symbol: str):
-    from binance_client import client
+    from binance_api import client
     from decimal import Decimal
     info = client.futures_exchange_info()
     for s in info['symbols']:

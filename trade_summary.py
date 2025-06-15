@@ -6,8 +6,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from collections import deque
 from utils import to_kst
-from telegram_notifier import send_telegram, send_telegram_photo
-from config import SUMMARY_TIMES
+from telegram_bot import send_telegram, send_telegram_photo
+from risk_config import SUMMARY_TIMES
 
 # trade_log: 거래 로그 리스트 (외부에서 전달받음)
 #   예시 entry: {'timestamp': float, 'symbol': str, 'side': str, 'pnl_pct': float, 'pnl_usdt': float}
