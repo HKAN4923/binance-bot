@@ -3,9 +3,26 @@ from strategy_nr7 import check_entry as nr7_entry, check_exit as nr7_exit
 from strategy_pullback import check_entry as pullback_entry, check_exit as pullback_exit
 from strategy_ema_cross import check_entry as ema_entry, check_exit as ema_exit
 from trade_summary import print_open_positions
-import time
+from binance.client import Client
+from dotenv import load_dotenv
+import os, time
 
-SYMBOLS = ["BTCUSDT", "ETHUSDT"]
+load_dotenv()
+client = Client(os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_API_SECRET"))
+
+def load_symbols(top_n=50):
+    try:
+        tickers = client.get_ticker_24hr()
+        usdt_pairs = [t for t in tickers if t["symbol"].endswith("USDT") and not t["symbol"].endswith("BUSD")]
+        sorted_pairs = sorted(usdt_pairs, key=lambda x: float(x["quoteVolume"]), reverse=True)
+        symbols = [t["symbol"] for t in sorted_pairs[:top_n]]
+        print(f"[INFO] 상위 {top_n}개 거래량 심볼 불러옴")
+        return symbols
+    except Exception as e:
+        print(f"[ERROR] 심볼 로딩 실패: {e}")
+        return ["BTCUSDT", "ETHUSDT"]
+
+SYMBOLS = load_symbols(50)
 
 def run_all_entries():
     for sym in SYMBOLS:
@@ -36,8 +53,7 @@ def main():
             print_open_positions()
             last_status_time = now
 
-        time.sleep(10)
-
+        time.sleep(1)
 
 if __name__ == "__main__":
     main()

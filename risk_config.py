@@ -1,5 +1,5 @@
 # risk_config.py
-LEVERAGE = 5
+LEVERAGE = 1
 POSITION_RATIO = 0.2
 
 ORB_TP_PERCENT = 2.0
