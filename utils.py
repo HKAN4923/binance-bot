@@ -1,12 +1,23 @@
-# utils.py
+# utils.py (수정본)
 from decimal import Decimal, ROUND_DOWN, getcontext
 import datetime
 import pytz
 import logging
 
+# 계산: 익절가, 손절가
+
+def calculate_tp_sl(entry_price, tp_percent, sl_percent, side):
+    tp = entry_price * (1 + tp_percent / 100) if side == "long" else entry_price * (1 - tp_percent / 100)
+    sl = entry_price * (1 - sl_percent / 100) if side == "long" else entry_price * (1 + sl_percent / 100)
+    return round(tp, 2), round(sl, 2)
+
+# 현재시간을 KST로 변환
+
 def to_kst(ts: float):
     utc_dt = datetime.datetime.utcfromtimestamp(ts).replace(tzinfo=pytz.UTC)
     return utc_dt.astimezone(pytz.timezone("Asia/Seoul"))
+
+# 수량 계산 (소수점 반영, 최소 수량 필터)
 
 def calculate_qty(balance: float, price: float, leverage: int, fraction: float, qty_precision: int, min_qty: float):
     getcontext().prec = qty_precision + 10
@@ -16,6 +27,8 @@ def calculate_qty(balance: float, price: float, leverage: int, fraction: float, 
     if qty < Decimal(str(min_qty)):
         return 0.0
     return float(qty)
+
+# 거래량 상위 100개 심볼
 
 def get_top_100_volume_symbols():
     from binance_api import client
@@ -31,6 +44,8 @@ def get_top_100_volume_symbols():
         logging.error(f"get_top_100_volume_symbols 오류: {e}")
         return []
 
+# 거래 가능한 심볼 필터
+
 def get_tradable_futures_symbols():
     from binance_api import client
     try:
@@ -43,6 +58,8 @@ def get_tradable_futures_symbols():
     except Exception as e:
         logging.error(f"get_tradable_futures_symbols 오류: {e}")
         return []
+
+# 가격 소수점 단위
 
 def get_tick_size(symbol: str):
     from binance_api import client
