@@ -10,25 +10,19 @@ import os, time
 load_dotenv()
 client = Client(os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_API_SECRET"))
 
-def load_symbols(top_n=100):
+def load_symbols(top_n=50):
     try:
-        tickers = client.futures_ticker()  # ✅ 올바른 함수명
-        exchange_info = client.futures_exchange_info()
-        valid = {
-            s["symbol"]
-            for s in exchange_info["symbols"]
-            if s["contractType"] == "PERPETUAL"
-            and s["symbol"].endswith("USDT")
-            and s["status"] == "TRADING"
-        }
-        filtered = [t for t in tickers if t["symbol"] in valid and "quoteVolume" in t]
-        sorted_symbols = sorted(filtered, key=lambda x: float(x["quoteVolume"]), reverse=True)
-        return [s["symbol"] for s in sorted_symbols[:top_n]]
+        tickers = client.futures_ticker_24hr()
+        usdt_pairs = [t for t in tickers if t["symbol"].endswith("USDT") and not t["symbol"].endswith("BUSD")]
+        sorted_pairs = sorted(usdt_pairs, key=lambda x: float(x["quoteVolume"]), reverse=True)
+        symbols = [t["symbol"] for t in sorted_pairs[:top_n]]
+        print(f"[INFO] 상위 {top_n}개 거래량 심볼 불러옴")
+        return symbols
     except Exception as e:
         print(f"[ERROR] 심볼 로딩 실패: {e}")
         return ["BTCUSDT", "ETHUSDT"]
 
-SYMBOLS = load_symbols()
+SYMBOLS = load_symbols(50)
 
 def run_all_entries():
     for sym in SYMBOLS:
@@ -48,6 +42,7 @@ def main():
     last_status_time = 0
     while True:
         now = time.time()
+
         try:
             run_all_entries()
             run_all_exits()
@@ -58,7 +53,7 @@ def main():
             print_open_positions()
             last_status_time = now
 
-        time.sleep(10)
+        time.sleep(1)
 
 if __name__ == "__main__":
     main()
