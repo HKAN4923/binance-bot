@@ -1,21 +1,17 @@
-class TradeSummary:
-    def __init__(self):
-        self.wins = 0
-        self.losses = 0
-        self.total_pnl = 0.0
+from position_manager import open_positions
 
-    def record(self, pnl: float):
-        if pnl > 0:
-            self.wins += 1
-        else:
-            self.losses += 1
-        self.total_pnl += pnl
+def summarize_trades():
+    try:
+        with open("trades.log", "r") as f:
+            lines = f.readlines()
+        print(f"총 트레이드 수: {len(lines)}")
+        wins = sum(1 for line in lines if "'reason': 'TP'" in line)
+        losses = sum(1 for line in lines if "'reason': 'SL'" in line)
+        print(f"승: {wins}, 패: {losses}, 승률: {wins / max(1, wins + losses) * 100:.1f}%")
+    except FileNotFoundError:
+        print("트레이드 로그 없음")
 
-    def get_win_rate(self) -> float:
-        total = self.wins + self.losses
-        return (self.wins / total * 100) if total > 0 else 0.0
-
-    def get_total_pnl(self) -> float:
-        return self.total_pnl
-
-trade_summary = TradeSummary()
+def print_open_positions():
+    print(f"분석중...({len(open_positions)}/5)")
+    for sym, pos in open_positions.items():
+        print(f"{sym}: {pos}")

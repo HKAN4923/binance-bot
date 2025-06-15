@@ -42,10 +42,10 @@ def check_entry(symbol):
     rsi = calculate_rsi(closes[-15:], 14)
     price = closes[-1]
 
-    if ema9_prev < ema21_prev and ema9_now > ema21_now and rsi > 50:
+    if ema9_prev < ema21_prev and ema9_now > ema21_now and rsi > 45:
         direction = "long"
         side = "BUY"
-    elif ema9_prev > ema21_prev and ema9_now < ema21_now and rsi < 50:
+    elif ema9_prev > ema21_prev and ema9_now < ema21_now and rsi < 55:
         direction = "short"
         side = "SELL"
     else:
