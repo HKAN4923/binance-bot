@@ -6,9 +6,6 @@ def can_enter(symbol, strategy):
 
 def add_position(symbol, entry_price, strategy, side, qty):
     from datetime import datetime
-    if qty <= 0:
-        print(f"[{symbol}] 체결 수량 없음 → 포지션 등록 생략")
-        return
     open_positions[symbol] = {
         "entry_price": entry_price,
         "strategy": strategy,

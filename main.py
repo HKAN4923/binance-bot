@@ -12,11 +12,10 @@ client = Client(os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_API_SECRET"))
 
 def load_symbols(top_n=50):
     try:
-        tickers = client.futures_ticker_24hr()
+        tickers = client.futures_ticker_price()
         usdt_pairs = [t for t in tickers if t["symbol"].endswith("USDT") and not t["symbol"].endswith("BUSD")]
-        sorted_pairs = sorted(usdt_pairs, key=lambda x: float(x["quoteVolume"]), reverse=True)
-        symbols = [t["symbol"] for t in sorted_pairs[:top_n]]
-        print(f"[INFO] 상위 {top_n}개 거래량 심볼 불러옴")
+        symbols = sorted([t["symbol"] for t in usdt_pairs])[:top_n]
+        print(f"[INFO] 상위 {top_n}개 심볼 로딩 완료")
         return symbols
     except Exception as e:
         print(f"[ERROR] 심볼 로딩 실패: {e}")

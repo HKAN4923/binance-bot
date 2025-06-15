@@ -28,10 +28,10 @@ def check_entry(symbol):
     price = closes[-1]
     prev_price = closes[-2]
 
-    if price > ema21:
+    if prev_price < ema21 < price:
         direction = "long"
         side = "BUY"
-    elif price < ema21:
+    elif prev_price > ema21 > price:
         direction = "short"
         side = "SELL"
     else:

@@ -16,7 +16,7 @@ def calculate_order_quantity(symbol):
 
         balance = get_futures_balance()
         base_value = balance * POSITION_RATIO
-        order_value = base_value * LEVERAGE
+        order_value = base_value * LEVERAGE  # 최종 포지션 금액
         qty = order_value / price
 
         step_size = get_lot_size(symbol)
@@ -56,11 +56,8 @@ def extract_entry_price(order_resp):
 
 def log_trade(data):
     try:
-        assert "tp" in data and "sl" in data, "[오류] TP/SL 누락됨"
         with open("trades.log", "a") as f:
             f.write(str(data) + "\n")
-    except AssertionError as ae:
-        print(f"[로그 저장 오류] {ae}")
     except Exception as e:
         print(f"[로그 저장 오류] {e}")
 
