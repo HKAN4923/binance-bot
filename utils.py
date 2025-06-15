@@ -25,9 +25,14 @@ def calculate_order_quantity(symbol):
 
         precision = abs(int(round(-1 * math.log10(step_size))))
         final_qty = round(qty, precision)
+        notional = final_qty * price
 
         if final_qty < step_size:
             print(f"[SKIP] {symbol} 주문 수량({final_qty})이 최소 수량({step_size})보다 작음")
+            return 0
+
+        if notional < 20:
+            print(f"[SKIP] {symbol} 주문 금액 ${notional:.2f} < 최소 $20")
             return 0
 
         return final_qty
