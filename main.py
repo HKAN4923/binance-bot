@@ -12,7 +12,7 @@ client = Client(os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_API_SECRET"))
 
 def load_symbols(top_n=50):
     try:
-        tickers = client.futures_ticker_24hr()
+        tickers = client.futures_ticker()
         usdt_pairs = [t for t in tickers if t["symbol"].endswith("USDT") and not t["symbol"].endswith("BUSD")]
         sorted_pairs = sorted(usdt_pairs, key=lambda x: float(x["quoteVolume"]), reverse=True)
         symbols = [t["symbol"] for t in sorted_pairs[:top_n]]
