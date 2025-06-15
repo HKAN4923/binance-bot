@@ -1,66 +1,56 @@
-import math
-from binance_api import get_price, get_futures_balance, get_lot_size
-from risk_config import POSITION_RATIO, LEVERAGE
+# utils.py
+from decimal import Decimal, ROUND_DOWN, getcontext
+import datetime
+import pytz
+import logging
 
-def calculate_tp_sl(entry_price, tp_percent, sl_percent, side):
-    tp = entry_price * (1 + tp_percent / 100) if side == "long" else entry_price * (1 - tp_percent / 100)
-    sl = entry_price * (1 - sl_percent / 100) if side == "long" else entry_price * (1 + sl_percent / 100)
-    return round(tp, 2), round(sl, 2)
+def to_kst(ts: float):
+    utc_dt = datetime.datetime.utcfromtimestamp(ts).replace(tzinfo=pytz.UTC)
+    return utc_dt.astimezone(pytz.timezone("Asia/Seoul"))
 
-def calculate_order_quantity(symbol):
+def calculate_qty(balance: float, price: float, leverage: int, fraction: float, qty_precision: int, min_qty: float):
+    getcontext().prec = qty_precision + 10
+    raw = Decimal(balance) * Decimal(leverage) * Decimal(fraction) / Decimal(price)
+    quant = Decimal('1e-{}'.format(qty_precision))
+    qty = raw.quantize(quant, rounding=ROUND_DOWN)
+    if qty < Decimal(str(min_qty)):
+        return 0.0
+    return float(qty)
+
+def get_top_100_volume_symbols():
+    from binance_client import client
     try:
-        price = get_price(symbol)
-        if price is None or price == 0:
-            print(f"[{symbol}] 가격 조회 실패")
-            return 0
-
-        balance = get_futures_balance()
-        base_value = balance * POSITION_RATIO
-        order_value = base_value * LEVERAGE  # 최종 포지션 금액
-        qty = order_value / price
-
-        step_size = get_lot_size(symbol)
-        if step_size is None:
-            print(f"[{symbol}] 최소 수량 정보 없음")
-            return 0
-
-        precision = abs(int(round(-1 * math.log10(step_size))))
-        final_qty = round(qty, precision)
-        notional = final_qty * price
-
-        if final_qty < step_size:
-            print(f"[{symbol}] 수량 부족 → {final_qty} < {step_size}")
-            return 0
-
-        if notional < 20:
-            print(f"[{symbol}] 금액 부족 → ${notional:.2f} < $20")
-            return 0
-
-        return final_qty
+        stats_24h = client.futures_ticker()
+        usdt_pairs = [
+            {"symbol": s["symbol"], "volume": float(s["quoteVolume"])}
+            for s in stats_24h if s["symbol"].endswith("USDT")
+        ]
+        usdt_pairs.sort(key=lambda x: x["volume"], reverse=True)
+        return [s["symbol"] for s in usdt_pairs[:100]]
     except Exception as e:
-        print(f"[{symbol}] 수량 계산 오류: {e}")
-        return 0
+        logging.error(f"get_top_100_volume_symbols 오류: {e}")
+        return []
 
-def extract_entry_price(order_resp):
+def get_tradable_futures_symbols():
+    from binance_client import client
     try:
-        if not order_resp:
-            print("[주문 실패] 응답 없음")
-            return None
-        if float(order_resp.get("executedQty", 0)) == 0:
-            print("[주문 실패] 체결되지 않음 (executedQty = 0)")
-            return None
-        return float(order_resp.get("avgFillPrice", 0))
+        exchange_info = client.futures_exchange_info()
+        symbols = [
+            s["symbol"] for s in exchange_info["symbols"]
+            if s["contractType"] == "PERPETUAL" and s["quoteAsset"] == "USDT" and s["status"] == "TRADING"
+        ]
+        return symbols
     except Exception as e:
-        print(f"[extract_entry_price 오류] {e}")
-        return None
+        logging.error(f"get_tradable_futures_symbols 오류: {e}")
+        return []
 
-def log_trade(data):
-    try:
-        with open("trades.log", "a") as f:
-            f.write(str(data) + "\n")
-    except Exception as e:
-        print(f"[로그 저장 오류] {e}")
-
-def now_string():
-    import datetime
-    return datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+def get_tick_size(symbol: str):
+    from binance_client import client
+    from decimal import Decimal
+    info = client.futures_exchange_info()
+    for s in info['symbols']:
+        if s['symbol'] == symbol:
+            for f in s['filters']:
+                if f['filterType'] == 'PRICE_FILTER':
+                    return Decimal(str(f['tickSize']))
+    return Decimal("0.01")
