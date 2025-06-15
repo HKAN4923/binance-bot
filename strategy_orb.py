@@ -16,11 +16,6 @@ def is_entry_time_kst():
     return (now.hour == 9 and now.minute < 60) or (now.hour == 21 and now.minute < 60)
 
 def check_entry(symbol):
-    candles = get_klines(symbol, interval='5m', limit=30)
-    if not candles or len(candles) < 30:
-        print(f"[SKIP] {symbol}: ORB - 캔들 부족")
-        return
-
     if not is_entry_time_kst() or not can_enter(symbol, "orb"):
         return
 

@@ -19,11 +19,6 @@ def calculate_ema(values, length):
     return ema
 
 def check_entry(symbol):
-    candles = get_klines(symbol, interval='5m', limit=30)
-    if not candles or len(candles) < 30:
-        print(f"[SKIP] {symbol}: PULLBACK - 캔들 부족")
-        return
-
     if not can_enter(symbol, "pullback"):
         return
 
