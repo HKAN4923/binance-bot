@@ -12,14 +12,18 @@ client = Client(os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_API_SECRET"))
 
 def load_symbols(top_n=100):
     try:
-        info = client.futures_exchange_info()
-        symbols = [
-            s["symbol"] for s in info["symbols"]
+        tickers = client.futures_ticker_24hr()
+        exchange_info = client.futures_exchange_info()
+        valid = {
+            s["symbol"]
+            for s in exchange_info["symbols"]
             if s["contractType"] == "PERPETUAL"
             and s["symbol"].endswith("USDT")
             and s["status"] == "TRADING"
-        ]
-        return sorted(symbols)[:top_n]
+        }
+        filtered = [t for t in tickers if t["symbol"] in valid]
+        sorted_symbols = sorted(filtered, key=lambda x: float(x["quoteVolume"]), reverse=True)
+        return [s["symbol"] for s in sorted_symbols[:top_n]]
     except Exception as e:
         print(f"[ERROR] 심볼 로딩 실패: {e}")
         return ["BTCUSDT", "ETHUSDT"]
