@@ -12,7 +12,7 @@ client = Client(os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_API_SECRET"))
 
 def load_symbols(top_n=100):
     try:
-        tickers = client.futures_ticker_24hr()
+        tickers = client.futures_ticker_24hr_price_change()
         exchange_info = client.futures_exchange_info()
         valid = {
             s["symbol"]
