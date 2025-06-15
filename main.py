@@ -5,7 +5,7 @@ import threading
 import logging
 import numpy as np
 from decimal import Decimal, ROUND_DOWN
-from config import (
+from risk_config import (
     MAX_POSITIONS, ANALYSIS_INTERVAL_SEC, LEVERAGE,
     PRIMARY_THRESHOLD, AUX_COUNT_THRESHOLD,
     EMA_SHORT_LEN, EMA_LONG_LEN, VOLUME_SPIKE_MULTIPLIER,
