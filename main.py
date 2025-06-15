@@ -10,21 +10,21 @@ import os, time
 load_dotenv()
 client = Client(os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_API_SECRET"))
 
-def load_symbols(top_n=50):
+def load_symbols(top_n=100):
     try:
         info = client.futures_exchange_info()
         symbols = [
             s["symbol"] for s in info["symbols"]
-            if s["contractType"] == "PERPETUAL" and s["symbol"].endswith("USDT")
+            if s["contractType"] == "PERPETUAL"
+            and s["symbol"].endswith("USDT")
+            and s["status"] == "TRADING"
         ]
-        symbols = sorted(symbols)[:top_n]
-        print(f"[INFO] {len(symbols)}개 선물 심볼 로딩 완료")
-        return symbols
+        return sorted(symbols)[:top_n]
     except Exception as e:
         print(f"[ERROR] 심볼 로딩 실패: {e}")
         return ["BTCUSDT", "ETHUSDT"]
 
-SYMBOLS = load_symbols(50)
+SYMBOLS = load_symbols()
 
 def run_all_entries():
     for sym in SYMBOLS:
@@ -44,7 +44,6 @@ def main():
     last_status_time = 0
     while True:
         now = time.time()
-
         try:
             run_all_entries()
             run_all_exits()
@@ -55,7 +54,7 @@ def main():
             print_open_positions()
             last_status_time = now
 
-        time.sleep(1)
+        time.sleep(10)
 
 if __name__ == "__main__":
     main()
