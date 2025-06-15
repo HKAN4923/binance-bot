@@ -1,6 +1,6 @@
 import math
 from binance_api import get_price, get_futures_balance, get_lot_size
-from risk_config import POSITION_RATIO
+from risk_config import POSITION_RATIO, LEVERAGE
 
 def calculate_tp_sl(entry_price, tp_percent, sl_percent, side):
     tp = entry_price * (1 + tp_percent / 100) if side == "long" else entry_price * (1 - tp_percent / 100)
@@ -15,7 +15,7 @@ def calculate_order_quantity(symbol):
             return 0
 
         balance = get_futures_balance()
-        order_value = balance * POSITION_RATIO
+        order_value = balance * POSITION_RATIO*LEVERAGE
         qty = order_value / price
 
         step_size = get_lot_size(symbol)
