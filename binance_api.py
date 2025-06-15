@@ -56,3 +56,17 @@ def get_futures_balance():
     except Exception as e:
         print(f"[ERROR] get_futures_balance: {e}")
         return 0
+
+def get_lot_size(symbol):
+    try:
+        exchange_info = client.futures_exchange_info()
+        symbol_info = next((s for s in exchange_info["symbols"] if s["symbol"] == symbol), None)
+        if not symbol_info:
+            return None
+        for f in symbol_info["filters"]:
+            if f["filterType"] == "LOT_SIZE":
+                return float(f["stepSize"])
+        return None
+    except Exception as e:
+        print(f"[ERROR] get_lot_size({symbol}): {e}")
+        return None

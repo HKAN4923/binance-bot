@@ -1,4 +1,4 @@
-from binance_api import get_price, get_futures_balance
+from binance_api import get_price, get_futures_balance, get_lot_size
 from risk_config import POSITION_RATIO
 
 def calculate_tp_sl(entry_price, tp_percent, sl_percent, side):
@@ -14,19 +14,19 @@ def calculate_order_quantity(symbol):
             return 0
 
         balance = get_futures_balance()
-        order_value = balance * POSITION_RATIO  # 레버리지 1배
+        order_value = balance * POSITION_RATIO
         qty = order_value / price
 
-        # 최소 주문 수량 (코인별)
-        MIN_QTY = {
-            "BTCUSDT": 0.001,
-            "ETHUSDT": 0.01,
-        }
-        min_qty = MIN_QTY.get(symbol, 0.001)
+        step_size = get_lot_size(symbol)
+        if step_size is None:
+            print(f"[ERROR] {symbol} stepSize 조회 실패")
+            return 0
 
-        final_qty = round(qty, 3)
-        if final_qty < min_qty:
-            print(f"[SKIP] {symbol} 주문 수량({final_qty})이 최소 수량({min_qty})보다 작음")
+        precision = abs(int(round(-1 * math.log10(step_size))))
+        final_qty = round(qty, precision)
+
+        if final_qty < step_size:
+            print(f"[SKIP] {symbol} 주문 수량({final_qty})이 최소 수량({step_size})보다 작음")
             return 0
 
         return final_qty
