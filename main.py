@@ -12,7 +12,7 @@ client = Client(os.getenv("BINANCE_API_KEY"), os.getenv("BINANCE_API_SECRET"))
 
 def load_symbols(top_n=100):
     try:
-        tickers = client.futures_ticker_24hr_price_change()
+        tickers = client.futures_ticker()  # ✅ 올바른 함수명
         exchange_info = client.futures_exchange_info()
         valid = {
             s["symbol"]
@@ -21,7 +21,7 @@ def load_symbols(top_n=100):
             and s["symbol"].endswith("USDT")
             and s["status"] == "TRADING"
         }
-        filtered = [t for t in tickers if t["symbol"] in valid]
+        filtered = [t for t in tickers if t["symbol"] in valid and "quoteVolume" in t]
         sorted_symbols = sorted(filtered, key=lambda x: float(x["quoteVolume"]), reverse=True)
         return [s["symbol"] for s in sorted_symbols[:top_n]]
     except Exception as e:
