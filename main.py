@@ -22,14 +22,22 @@ def run_all_exits():
         ema_exit(sym)
 
 def main():
+    last_status_time = 0
     while True:
-        print_open_positions()
+        now = time.time()
+
         try:
             run_all_entries()
             run_all_exits()
         except Exception as e:
             print(f"[메인 루프 오류] {e}")
-        time.sleep(60)
+
+        if now - last_status_time >= 10:
+            print_open_positions()
+            last_status_time = now
+
+        time.sleep(10)
+
 
 if __name__ == "__main__":
     main()
