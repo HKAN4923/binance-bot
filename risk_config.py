@@ -1,11 +1,12 @@
 # risk_config.py
 
-# 포지션 설정
-POSITION_RATIO = 0.25  # 내 총 자산의 25% 사용
-LEVERAGE = 5           # 5배 레버리지
-MAX_POSITIONS = 5      # 최대 동시 포지션 수
+# 자산 대비 포지션 비율 및 레버리지 설정
+POSITION_RATIO = 0.25
+LEVERAGE = 5
+MAX_POSITIONS = 5
+MIN_NOTIONAL = 5.0  # 바이낸스 최소 거래 금액 기준
 
-# 전략별 TP/SL 및 타임컷 설정 (% 단위)
+# 전략별 TP/SL 비율 (%)
 ORB_TP_PERCENT = 2
 ORB_SL_PERCENT = 1
 ORB_TIMECUT_HOURS = 3
@@ -19,6 +20,3 @@ EMA_SL_PERCENT = 1.2
 
 PULLBACK_TP_PERCENT = 1.2
 PULLBACK_SL_PERCENT = 0.8
-
-# ✅ 최소 주문 금액 설정
-MIN_NOTIONAL = 5.0  # 바이낸스 선물 최소 주문 금액 USDT 기준

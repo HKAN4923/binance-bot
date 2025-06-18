@@ -41,3 +41,17 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+from telegram_bot import send_telegram
+
+def main():
+    send_telegram("📢 자동매매 봇 시작됨")  # ✅ 봇 시작 알림 추가
+
+    while True:
+        try:
+            print(f"분석중... ({len(open_positions)}/{MAX_POSITIONS})")
+            run_all_entries()
+            run_all_exits()
+        except Exception as e:
+            print(f"[메인 루프 오류] {e}")
+        time.sleep(10)
