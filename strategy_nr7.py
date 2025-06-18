@@ -8,9 +8,9 @@ from utils import (
     now_string,
     calculate_order_quantity,
     extract_entry_price,
-    summarize_trades  # ✅ 누적 요약 함수
+    summarize_trades
 )
-from telegram_bot import send_telegram  # ✅ 텔레그램 알림
+from telegram_bot import send_telegram
 from risk_config import NR7_TP_PERCENT, NR7_SL_PERCENT, NR7_TIMECUT_HOURS
 
 def is_entry_time_kst():
@@ -70,6 +70,14 @@ def check_entry(symbol):
         "status": "entry"
     })
 
+    # ✅ 텔레그램 진입 알림
+    message = (
+        f"✅ 진입: {symbol} ({direction}) @ {entry_price:.2f}\n"
+        f"전략: NR7 | 수량: {qty}\n"
+        f"TP: {tp:.2f} / SL: {sl:.2f}"
+    )
+    send_telegram(message)
+
 def check_exit(symbol):
     if symbol not in open_positions or open_positions[symbol]["strategy"] != "nr7":
         return
@@ -111,6 +119,14 @@ def check_exit(symbol):
             "status": "exit"
         })
 
-        # ✅ 텔레그램 누적 요약 알림 전송
+        # ✅ 텔레그램 청산 알림 + 누적 통계
+        pl = (price - entry_price) * qty if side == "long" else (entry_price - price) * qty
+        emoji = "🟢" if pl >= 0 else "🔴"
+        result_msg = (
+            f"{emoji} 청산: {symbol} ({side}) @ {price:.2f}\n"
+            f"손익: {pl:.2f} USDT | 전략: NR7"
+        )
+        send_telegram(result_msg)
+
         summary = summarize_trades()
         send_telegram(summary)

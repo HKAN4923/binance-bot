@@ -8,9 +8,10 @@ from utils import (
     now_string,
     calculate_order_quantity,
     extract_entry_price,
-    summarize_trades  # ✅ 요약 함수 불러오기
+    summarize_trades,
+    calculate_rsi
 )
-from telegram_bot import send_telegram  # ✅ 텔레그램 알림
+from telegram_bot import send_telegram
 from risk_config import EMA_TP_PERCENT, EMA_SL_PERCENT
 
 def calculate_ema(values, length):
@@ -19,17 +20,6 @@ def calculate_ema(values, length):
     for price in values[1:]:
         ema = price * k + ema * (1 - k)
     return ema
-
-def calculate_rsi(values, period=14):
-    deltas = [values[i+1] - values[i] for i in range(len(values)-1)]
-    gains = [d for d in deltas if d > 0]
-    losses = [-d for d in deltas if d < 0]
-    avg_gain = sum(gains[-period:]) / period if gains else 0
-    avg_loss = sum(losses[-period:]) / period if losses else 0
-    if avg_loss == 0:
-        return 100
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
 
 def check_entry(symbol):
     if not can_enter(symbol, "ema"):
@@ -42,7 +32,7 @@ def check_entry(symbol):
     ema9_now = calculate_ema(closes[-20:], 9)
     ema21_now = calculate_ema(closes[-20:], 21)
     rsi = calculate_rsi(closes[-15:], 14)
-    price = closes[-1]
+    price = closes[-1]  # 🔍 사용 안 하더라도 유지 가능
 
     if ema9_prev < ema21_prev and ema9_now > ema21_now and rsi > 50:
         direction = "long"
@@ -78,6 +68,14 @@ def check_entry(symbol):
         "position_size": qty,
         "status": "entry"
     })
+
+    # ✅ 텔레그램 진입 알림
+    message = (
+        f"✅ 진입: {symbol} ({direction}) @ {entry_price:.2f}\n"
+        f"전략: EMA | 수량: {qty}\n"
+        f"TP: {tp:.2f} / SL: {sl:.2f}"
+    )
+    send_telegram(message)
 
 def check_exit(symbol):
     if symbol not in open_positions or open_positions[symbol]["strategy"] != "ema":
@@ -116,6 +114,14 @@ def check_exit(symbol):
             "status": "exit"
         })
 
-        # ✅ 텔레그램 요약 전송
+        # ✅ 텔레그램 청산 알림 + 누적 통계
+        pl = (price - entry_price) * qty if side == "long" else (entry_price - price) * qty
+        emoji = "🟢" if pl >= 0 else "🔴"
+        result_msg = (
+            f"{emoji} 청산: {symbol} ({side}) @ {price:.2f}\n"
+            f"손익: {pl:.2f} USDT | 전략: EMA"
+        )
+        send_telegram(result_msg)
+
         summary = summarize_trades()
         send_telegram(summary)
