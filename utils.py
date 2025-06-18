@@ -2,7 +2,7 @@
 import json
 import os
 from datetime import datetime
-from binance_api import get_futures_balance, get_lot_size
+from binance_api import get_futures_balance, get_lot_size, get_price, get_lot_precision
 from risk_config import POSITION_RATIO, LEVERAGE, MIN_NOTIONAL
 
 def now_string():
@@ -37,10 +37,15 @@ def calculate_order_quantity(symbol):
     price = get_price(symbol)
     if price is None:
         return 0
-    qty = round(amount / price, 3)
+
+    qty = amount / price
     min_qty = get_lot_size(symbol)
     if min_qty is None or qty * price < MIN_NOTIONAL:
         return 0
+
+    precision = get_lot_precision(symbol)
+    qty = round(qty, precision)
+
     return max(qty, min_qty)
 
 def get_price(symbol):
@@ -76,5 +81,5 @@ def calculate_rsi(closes, period=14):
     return rsi
 
 def summarize_trades():
-    # TODO: 실제 손익 데이터를 기반으로 통계 요약
+    # TODO: 추후 실제 누적 손익 계산용 로직 연결
     return "📊 누적 손익 요약 기능은 준비 중입니다."

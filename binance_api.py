@@ -48,6 +48,21 @@ def get_lot_size(symbol):
         print(f"[수량 단위 조회 오류] {symbol}: {e}")
         return None
 
+def get_lot_precision(symbol):
+    try:
+        info = client.futures_exchange_info()
+        for item in info["symbols"]:
+            if item["symbol"] == symbol:
+                for f in item["filters"]:
+                    if f["filterType"] == "LOT_SIZE":
+                        min_qty = float(f["minQty"])
+                        precision = abs(int(round(-1 * (min_qty).as_integer_ratio()[1] ** -1).bit_length()))
+                        return precision
+        return 3  # 기본값
+    except Exception as e:
+        print(f"[수량 정밀도 조회 오류] {symbol}: {e}")
+        return 3
+
 def place_market_order(symbol, side, quantity):
     try:
         return client.futures_create_order(
