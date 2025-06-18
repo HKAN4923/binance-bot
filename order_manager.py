@@ -1,14 +1,39 @@
 # order_manager.py
 from binance_api import (
+    client,
     place_market_order,
-    create_take_profit,
-    create_stop_order,
     place_market_exit,
     get_price
 )
 from utils import calculate_tp_sl, extract_entry_price, now_string, summarize_trades, log_trade
 from position_manager import add_position, remove_position
 from telegram_bot import send_telegram
+
+def create_take_profit(symbol, side, stop_price):
+    try:
+        return client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type="TAKE_PROFIT_MARKET",
+            stopPrice=stop_price,
+            closePosition=True
+        )
+    except Exception as e:
+        print(f"[TP 주문 오류] {symbol}: {e}")
+        return {}
+
+def create_stop_order(symbol, side, stop_price):
+    try:
+        return client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type="STOP_MARKET",
+            stopPrice=stop_price,
+            closePosition=True
+        )
+    except Exception as e:
+        print(f"[SL 주문 오류] {symbol}: {e}")
+        return {}
 
 def handle_entry(signal):
     symbol = signal["symbol"]
@@ -26,10 +51,12 @@ def handle_entry(signal):
         return
 
     tp, sl = calculate_tp_sl(entry_price, tp_percent, sl_percent, direction)
-    create_take_profit(symbol, "SELL" if direction == "long" else "BUY", qty, tp)
-    create_stop_order(symbol, "SELL" if direction == "long" else "BUY", qty, sl)
 
-    add_position(symbol, entry_price, strategy, direction, qty)
+    # ✅ closePosition 기반 TP/SL 주문
+    create_take_profit(symbol, "SELL" if direction == "long" else "BUY", tp)
+    create_stop_order(symbol, "SELL" if direction == "long" else "BUY", sl)
+
+    add_position(symbol, side=direction, entry_price=entry_price, qty=qty, strategy=strategy)
 
     log_trade({
         "time": now_string(),
