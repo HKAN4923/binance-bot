@@ -2,23 +2,23 @@
 from datetime import datetime
 from risk_config import MAX_POSITIONS
 
-positions = {}
+open_positions = {}  # ✅ 외부 import용 이름으로 정의
 
 def can_enter(symbol, strategy):
-    return len(positions) < MAX_POSITIONS and symbol not in positions
+    return len(open_positions) < MAX_POSITIONS and symbol not in open_positions
 
 def add_position(symbol, side, entry_price, qty, strategy):
-    positions[symbol] = {
+    open_positions[symbol] = {
         "side": side,
         "entry_price": entry_price,
         "qty": qty,
         "strategy": strategy,
-        "entry_time": datetime.utcnow()  # ✅ 전략별 시간 조건에 필요
+        "entry_time": datetime.utcnow()
     }
 
 def remove_position(symbol):
-    if symbol in positions:
-        del positions[symbol]
+    if symbol in open_positions:
+        del open_positions[symbol]
 
 def get_open_positions():
-    return positions
+    return open_positions
