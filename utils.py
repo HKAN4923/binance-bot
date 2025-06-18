@@ -69,3 +69,26 @@ def summarize_trades():
     from trade_summary import get_trade_summary  # 순환참조 방지
     total, wins, losses, win_rate, total_pl = get_trade_summary()
     return f"📊 총 {total}회 | {wins}승 {losses}패 | 승률: {win_rate:.1f}%\n누적 손익: {total_pl:+.2f} USDT"
+
+def calculate_rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return 50  # 데이터 부족 시 중립값 반환
+
+    gains = []
+    losses = []
+    for i in range(1, period + 1):
+        change = closes[i] - closes[i - 1]
+        if change > 0:
+            gains.append(change)
+        else:
+            losses.append(abs(change))
+
+    average_gain = sum(gains) / period if gains else 0
+    average_loss = sum(losses) / period if losses else 0
+
+    if average_loss == 0:
+        return 100
+    rs = average_gain / average_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
