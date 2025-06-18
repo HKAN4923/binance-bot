@@ -17,6 +17,15 @@ def to_kst(ts: float):
     utc_dt = datetime.datetime.utcfromtimestamp(ts).replace(tzinfo=pytz.UTC)
     return utc_dt.astimezone(pytz.timezone("Asia/Seoul"))
 
+# 로그 저장
+
+def log_trade(data):
+    try:
+        with open("trades.log", "a") as f:
+            f.write(str(data) + "\n")
+    except Exception as e:
+        print(f"[로그 저장 오류] {e}")
+
 # 수량 계산 (소수점 반영, 최소 수량 필터)
 
 def calculate_qty(balance: float, price: float, leverage: int, fraction: float, qty_precision: int, min_qty: float):
