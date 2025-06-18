@@ -22,3 +22,6 @@ def remove_position(symbol):
 
 def get_open_positions():
     return open_positions
+
+def get_position(symbol):
+    return open_positions.get(symbol)
