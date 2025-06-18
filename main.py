@@ -1,26 +1,20 @@
-# main.py (최종 정리본 - 불필요한 import 제거 및 구조 정리)
 from strategy_orb import check_entry as orb_entry, check_exit as orb_exit
 from strategy_nr7 import check_entry as nr7_entry, check_exit as nr7_exit
 from strategy_pullback import check_entry as pullback_entry, check_exit as pullback_exit
 from strategy_ema_cross import check_entry as ema_entry, check_exit as ema_exit
 from trade_summary import print_open_positions
+from position_manager import get_open_position_count
 import time
 
-# 고정 심볼 리스트 (시장 안정성 기준)
+# 선물에서 안정적으로 거래되는 대표 심볼 50~100개
 SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "AVAXUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "DOTUSDT", "LINKUSDT",
     "MATICUSDT", "LTCUSDT", "BCHUSDT", "INJUSDT", "APTUSDT", "ARBUSDT", "OPUSDT", "IMXUSDT", "SUIUSDT", "RNDRUSDT",
-    "TONUSDT", "FILUSDT", "PEPEUSDT", "TUSDT", "STXUSDT", "WIFUSDT", "TIAUSDT", "NEARUSDT", "DYDXUSDT", "COTIUSDT",
-    "MASKUSDT", "1000FLOKIUSDT", "BLZUSDT", "CFXUSDT", "1000XECUSDT", "ACHUSDT", "ALICEUSDT", "GMTUSDT", "KLAYUSDT", "HBARUSDT",
-    "TRXUSDT", "CKBUSDT", "GALUSDT", "WAVESUSDT", "TOMOUSDT", "MAGICUSDT", "DUSKUSDT", "ONEUSDT", "SKLUSDT", "SANDUSDT",
-    "AGIXUSDT", "OCEANUSDT", "ZILUSDT", "RLCUSDT", "FLOWUSDT", "PHBUSDT", "LINAUSDT", "VETUSDT", "PERPUSDT", "GRTUSDT",
-    "XEMUSDT", "CHRUSDT", "CTSIUSDT", "BETAUSDT", "ENSUSDT", "FXSUSDT", "HIGHUSDT", "JOEUSDT", "KAVAUSDT", "KNCUSDT",
-    "LITUSDT", "LOOMUSDT", "MKRUSDT", "MINAUSDT", "NKNUSDT", "OXTUSDT", "QTUMUSDT", "RAYUSDT", "REEFUSDT", "ROSEUSDT",
-    "RSRUSDT", "SFPUSDT", "SNXUSDT", "STMXUSDT", "STORJUSDT", "SUNUSDT", "SXPUSDT", "THETAUSDT", "TLMUSDT", "UMAUSDT",
-    "UNFIUSDT", "VTHOUSDT", "XNOUSDT", "YFIUSDT", "ZRXUSDT", "ZRXUSDT", "NMRUSDT", "ALPHAUSDT", "ANTUSDT", "BADGERUSDT"
+    "NEARUSDT", "TIAUSDT", "TONUSDT", "WIFUSDT", "JASMYUSDT", "ENSUSDT", "PEPEUSDT", "SHIBUSDT", "TRXUSDT", "ATOMUSDT",
+    "FTMUSDT", "SANDUSDT", "AAVEUSDT", "DYDXUSDT", "FLOWUSDT", "GALAUSDT", "RUNEUSDT", "HBARUSDT", "STXUSDT", "COTIUSDT",
+    "XLMUSDT", "CFXUSDT", "BLZUSDT", "MAGICUSDT", "MASKUSDT", "ZILUSDT", "ONEUSDT", "ALGOUSDT", "BANDUSDT", "GMTUSDT"
 ]
 
-# 전략별 진입 실행
 def run_all_entries():
     for sym in SYMBOLS:
         orb_entry(sym)
@@ -28,7 +22,6 @@ def run_all_entries():
         pullback_entry(sym)
         ema_entry(sym)
 
-# 전략별 청산 실행
 def run_all_exits():
     for sym in SYMBOLS:
         orb_exit(sym)
@@ -36,7 +29,6 @@ def run_all_exits():
         pullback_exit(sym)
         ema_exit(sym)
 
-# 메인 루프
 def main():
     last_status_time = 0
     while True:
@@ -46,7 +38,6 @@ def main():
             run_all_exits()
         except Exception as e:
             print(f"[메인 루프 오류] {e}")
-
         if now - last_status_time >= 10:
             print_open_positions()
             last_status_time = now
