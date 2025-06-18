@@ -1,11 +1,12 @@
-# trade_summary.py - 포지션 상태를 터미널과 텔레그램으로 출력하는 유틸
-
+# trade_summary.py
 from position_manager import get_open_positions
 from telegram_bot import send_telegram
+from risk_config import MAX_POSITIONS
 
-# 포지션 상태 출력 (터미널 + 텔레그램)
 def print_open_positions():
     positions = get_open_positions()
+    count = len(positions)
+    print(f"분석중...({count}/{MAX_POSITIONS})")
 
     if not positions:
         print("📭 현재 보유 중인 포지션 없음")

@@ -37,3 +37,38 @@ def calculate_tp_sl(entry_price, side, rr_ratio=2.0, sl_pct=0.01):
 def to_kst(timestamp):
     """UTC timestamp → KST datetime"""
     return datetime.utcfromtimestamp(timestamp) + timedelta(hours=9)
+
+def summarize_trades():
+    try:
+        with open("trades.log", "r") as f:
+            lines = f.readlines()
+
+        total = len(lines)
+        wins = sum(1 for line in lines if "'reason': 'TP'" in line)
+        losses = sum(1 for line in lines if "'reason': 'SL'" in line)
+        pnl_sum = 0.0
+
+        for line in lines:
+            if "'exit_price':" in line and "'entry_price':" in line:
+                try:
+                    entry = float(line.split("'entry_price':")[1].split(",")[0])
+                    exit_ = float(line.split("'exit_price':")[1].split(",")[0])
+                    size = float(line.split("'position_size':")[1].split(",")[0]) if "'position_size':" in line else 1
+                    direction = line.split("'side':")[1].split(",")[0].strip().strip("'")
+                    diff = (exit_ - entry) if direction == "long" else (entry - exit_)
+                    pnl_sum += diff * size
+                except Exception:
+                    pass
+
+        win_rate = (wins / total * 100) if total else 0
+
+        summary = (
+            f"📊 누적 요약\n"
+            f"▶ 총 트레이드: {total}\n"
+            f"▶ 승: {wins} / 패: {losses} / 승률: {win_rate:.1f}%\n"
+            f"▶ 누적 수익: {pnl_sum:.2f} USDT"
+        )
+        return summary
+
+    except FileNotFoundError:
+        return "📊 트레이드 로그 없음"

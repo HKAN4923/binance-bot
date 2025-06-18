@@ -1,46 +1,116 @@
-from utils import calculate_quantity, apply_slippage, calculate_tp_sl, now_string
-from binance_api import client
-from position_manager import add_position, remove_position, get_open_positions
-from risk_config import MAX_POSITIONS, TRADE_AMOUNT_RATIO, LEVERAGE, FILTER_RATIO
+# strategy_nr7.py
+from datetime import datetime, timedelta
+from binance_api import get_price, get_klines, place_market_order, place_market_exit
+from position_manager import can_enter, add_position, remove_position, open_positions
+from utils import (
+    calculate_tp_sl,
+    log_trade,
+    now_string,
+    calculate_order_quantity,
+    extract_entry_price,
+    summarize_trades  # ✅ 누적 요약 함수
+)
+from telegram_bot import send_telegram  # ✅ 텔레그램 알림
+from risk_config import NR7_TP_PERCENT, NR7_SL_PERCENT, NR7_TIMECUT_HOURS
 
-import time
-
-entry_record = {}
+def is_entry_time_kst():
+    now = datetime.utcnow() + timedelta(hours=9)
+    return (now.hour == 9 and now.minute < 60) or (now.hour == 21 and now.minute < 60)
 
 def check_entry(symbol):
-    if symbol in get_open_positions():
+    if not is_entry_time_kst() or not can_enter(symbol, "nr7"):
         return
 
-    candles = client.futures_klines(symbol=symbol, interval="1h", limit=10)
-    if len(candles) < 7:
+    klines = get_klines(symbol, interval="1d", limit=8)
+    if len(klines) < 8:
         return
 
-    ranges = [float(c[2]) - float(c[3]) for c in candles[-7:]]
-    if ranges[-1] == min(ranges):
-        current_price = float(candles[-1][4])
-        balance = float(client.futures_account_balance()[1]["balance"])
-        qty = calculate_quantity(balance * TRADE_AMOUNT_RATIO, current_price, LEVERAGE, symbol)
-        if qty == 0 or len(get_open_positions()) >= MAX_POSITIONS:
-            return
+    ranges = [(float(k[2]) - float(k[3])) for k in klines[:-1]]
+    min_range_index = ranges.index(min(ranges))
+    if min_range_index != 6:
+        return
 
-        slippage_price = apply_slippage(current_price, "BUY")
-        tp, sl = calculate_tp_sl(slippage_price, "BUY")
+    prev_kline = klines[-2]
+    high = float(prev_kline[2])
+    low = float(prev_kline[3])
+    price = get_price(symbol)
 
-        client.futures_create_order(symbol=symbol, side="BUY", type="MARKET", quantity=qty)
-        add_position(symbol, "BUY", slippage_price, qty, "NR7")
-        client.futures_create_order(symbol=symbol, side="SELL", type="TAKE_PROFIT_MARKET", stopPrice=tp, closePosition=True)
-        client.futures_create_order(symbol=symbol, side="SELL", type="STOP_MARKET", stopPrice=sl, closePosition=True)
-        entry_record[symbol] = time.time()
-        print(f"[{now_string()}][NR7 진입] {symbol} 가격: {slippage_price}")
+    if price > high:
+        side = "BUY"
+        direction = "long"
+    elif price < low:
+        side = "SELL"
+        direction = "short"
+    else:
+        return
+
+    qty = calculate_order_quantity(symbol)
+    if qty <= 0:
+        print(f"[NR7] {symbol} 주문 스킵: 수량(qty)={qty}")
+        return
+
+    resp = place_market_order(symbol, side, qty)
+    entry_price = extract_entry_price(resp)
+    if entry_price is None:
+        print(f"[NR7] {symbol} 주문 실패: {resp}")
+        return
+
+    add_position(symbol, entry_price, "nr7", direction, qty)
+    tp, sl = calculate_tp_sl(entry_price, NR7_TP_PERCENT, NR7_SL_PERCENT, direction)
+
+    log_trade({
+        "time": now_string(),
+        "symbol": symbol,
+        "strategy": "nr7",
+        "side": direction,
+        "entry_price": entry_price,
+        "tp": tp,
+        "sl": sl,
+        "position_size": qty,
+        "status": "entry"
+    })
 
 def check_exit(symbol):
-    if symbol not in get_open_positions():
-        return
-    if get_open_positions()[symbol]["strategy"] != "NR7":
+    if symbol not in open_positions or open_positions[symbol]["strategy"] != "nr7":
         return
 
-    if time.time() - entry_record.get(symbol, 0) > 60 * 180:
-        qty = get_open_positions()[symbol]["qty"]
-        client.futures_create_order(symbol=symbol, side="SELL", type="MARKET", quantity=qty)
+    pos = open_positions[symbol]
+    entry_time = pos["entry_time"]
+    entry_price = pos["entry_price"]
+    side = pos["side"]
+    price = get_price(symbol)
+
+    tp, sl = calculate_tp_sl(entry_price, NR7_TP_PERCENT, NR7_SL_PERCENT, side)
+    should_exit = False
+    reason = ""
+
+    if (side == "long" and price >= tp) or (side == "short" and price <= tp):
+        reason = "TP"
+        should_exit = True
+    elif (side == "long" and price <= sl) or (side == "short" and price >= sl):
+        reason = "SL"
+        should_exit = True
+    elif datetime.utcnow() - entry_time > timedelta(hours=NR7_TIMECUT_HOURS):
+        reason = "TimeCut"
+        should_exit = True
+
+    if should_exit:
+        qty = pos["position_size"]
+        place_market_exit(symbol, "SELL" if side == "long" else "BUY", qty)
         remove_position(symbol)
-        print(f"[{now_string()}][NR7 청산] {symbol} 시간 초과 청산")
+
+        log_trade({
+            "time": now_string(),
+            "symbol": symbol,
+            "strategy": "nr7",
+            "side": side,
+            "exit_price": price,
+            "entry_price": entry_price,
+            "reason": reason,
+            "position_size": qty,
+            "status": "exit"
+        })
+
+        # ✅ 텔레그램 누적 요약 알림 전송
+        summary = summarize_trades()
+        send_telegram(summary)

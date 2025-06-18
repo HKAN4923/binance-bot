@@ -1,74 +1,111 @@
-from utils import calculate_quantity, apply_slippage, calculate_tp_sl, now_string
-from binance_api import client
-from position_manager import add_position, remove_position, get_open_positions
-from risk_config import MAX_POSITIONS, TRADE_AMOUNT_RATIO, LEVERAGE, FILTER_RATIO
+# strategy_orb.py
+from datetime import datetime, timedelta
+from binance_api import get_price, get_klines, place_market_order, place_market_exit
+from position_manager import can_enter, add_position, remove_position, open_positions
+from utils import (
+    calculate_tp_sl,
+    log_trade,
+    now_string,
+    calculate_order_quantity,
+    extract_entry_price,
+    summarize_trades  # ✅ 누적 요약 함수
+)
+from telegram_bot import send_telegram  # ✅ 텔레그램 알림
+from risk_config import ORB_TP_PERCENT, ORB_SL_PERCENT, ORB_TIMECUT_HOURS
 
-import time
-
-entry_record = {}
+def is_entry_time_kst():
+    now = datetime.utcnow() + timedelta(hours=9)
+    return (now.hour == 9 and now.minute < 60) or (now.hour == 21 and now.minute < 60)
 
 def check_entry(symbol):
-    if symbol in get_open_positions():
+    if not is_entry_time_kst() or not can_enter(symbol, "orb"):
         return
 
-    candles = client.futures_klines(symbol=symbol, interval="1m", limit=20)
-    if len(candles) < 10:
+    klines = get_klines(symbol, interval="1h", limit=2)
+    if len(klines) < 2:
         return
 
-    open_range = candles[0]
-    high = float(open_range[2])
-    low = float(open_range[3])
-    range_ = high - low
+    opening_candle = klines[-2]
+    open_high = float(opening_candle[2])
+    open_low = float(opening_candle[3])
+    price = get_price(symbol)
 
-    current_price = float(candles[-1][4])
-    upper_bound = high + range_ * 0.05
+    if price > open_high:
+        side = "BUY"
+        direction = "long"
+    elif price < open_low:
+        side = "SELL"
+        direction = "short"
+    else:
+        return
 
-    if current_price > upper_bound:
-        positions = get_open_positions()
-        if len(positions) >= MAX_POSITIONS:
-            return
+    qty = calculate_order_quantity(symbol)
+    if qty <= 0:
+        print(f"[ORB] {symbol} 주문 스킵: 수량(qty)={qty}")
+        return
 
-        balance = float(client.futures_account_balance()[1]["balance"])
-        qty = calculate_quantity(balance * TRADE_AMOUNT_RATIO, current_price, LEVERAGE, symbol)
-        if qty == 0:
-            return
+    resp = place_market_order(symbol, side, qty)
+    entry_price = extract_entry_price(resp)
+    if entry_price is None:
+        print(f"[ORB] {symbol} 주문 실패: {resp}")
+        return
 
-        slippage_price = apply_slippage(current_price, "BUY")
-        tp, sl = calculate_tp_sl(slippage_price, "BUY")
+    add_position(symbol, entry_price, "orb", direction, qty)
+    tp, sl = calculate_tp_sl(entry_price, ORB_TP_PERCENT, ORB_SL_PERCENT, direction)
 
-        order = client.futures_create_order(
-            symbol=symbol,
-            side="BUY",
-            type="MARKET",
-            quantity=qty
-        )
-        add_position(symbol, "BUY", slippage_price, qty, "ORB")
-        client.futures_create_order(symbol=symbol, side="SELL", type="TAKE_PROFIT_MARKET", stopPrice=tp, closePosition=True)
-        client.futures_create_order(symbol=symbol, side="SELL", type="STOP_MARKET", stopPrice=sl, closePosition=True)
-        entry_record[symbol] = time.time()
-        print(f"[{now_string()}][ORB 진입] {symbol} 가격: {slippage_price}")
+    log_trade({
+        "time": now_string(),
+        "symbol": symbol,
+        "strategy": "orb",
+        "side": direction,
+        "entry_price": entry_price,
+        "tp": tp,
+        "sl": sl,
+        "position_size": qty,
+        "status": "entry"
+    })
 
 def check_exit(symbol):
-    positions = get_open_positions()
-    if symbol not in positions:
-        return
-    if positions[symbol]["strategy"] != "ORB":
+    if symbol not in open_positions or open_positions[symbol]["strategy"] != "orb":
         return
 
-    candles = client.futures_klines(symbol=symbol, interval="1m", limit=2)
-    if len(candles) < 2:
-        return
+    pos = open_positions[symbol]
+    entry_time = pos["entry_time"]
+    entry_price = pos["entry_price"]
+    side = pos["side"]
+    price = get_price(symbol)
 
-    high = float(candles[-2][2])
-    low = float(candles[-2][3])
-    current_price = float(candles[-1][4])
+    tp, sl = calculate_tp_sl(entry_price, ORB_TP_PERCENT, ORB_SL_PERCENT, side)
+    should_exit = False
+    reason = ""
 
-    if current_price < low or time.time() - entry_record.get(symbol, 0) > 60 * 180:
-        client.futures_create_order(
-            symbol=symbol,
-            side="SELL",
-            type="MARKET",
-            quantity=positions[symbol]["qty"]
-        )
+    if (side == "long" and price >= tp) or (side == "short" and price <= tp):
+        reason = "TP"
+        should_exit = True
+    elif (side == "long" and price <= sl) or (side == "short" and price >= sl):
+        reason = "SL"
+        should_exit = True
+    elif datetime.utcnow() - entry_time > timedelta(hours=ORB_TIMECUT_HOURS):
+        reason = "TimeCut"
+        should_exit = True
+
+    if should_exit:
+        qty = pos["position_size"]
+        place_market_exit(symbol, "SELL" if side == "long" else "BUY", qty)
         remove_position(symbol)
-        print(f"[{now_string()}][ORB 청산] {symbol} 가격: {current_price}")
+
+        log_trade({
+            "time": now_string(),
+            "symbol": symbol,
+            "strategy": "orb",
+            "side": side,
+            "exit_price": price,
+            "entry_price": entry_price,
+            "reason": reason,
+            "position_size": qty,
+            "status": "exit"
+        })
+
+        # ✅ 텔레그램 누적 요약 알림 전송
+        summary = summarize_trades()
+        send_telegram(summary)
