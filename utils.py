@@ -130,3 +130,25 @@ def extract_entry_price(order_resp):
     except Exception as e:
         print(f"[extract_entry_price 오류] {e}")
         return None
+
+def calculate_rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return 50  # 데이터 부족 시 중립값 반환
+
+    gains = []
+    losses = []
+    for i in range(1, period + 1):
+        change = closes[i] - closes[i - 1]
+        if change > 0:
+            gains.append(change)
+        else:
+            losses.append(abs(change))
+
+    average_gain = sum(gains) / period if gains else 0
+    average_loss = sum(losses) / period if losses else 0
+
+    if average_loss == 0:
+        return 100
+    rs = average_gain / average_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
