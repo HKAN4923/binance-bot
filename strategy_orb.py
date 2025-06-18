@@ -1,6 +1,10 @@
 # strategy_orb.py
 from datetime import datetime, timedelta
-from binance_api import get_price, get_klines, place_market_order, place_market_exit
+from binance_api import (
+    get_price, get_klines,
+    place_market_order, place_market_exit,
+    create_take_profit, create_stop_order
+)
 from position_manager import can_enter, add_position, remove_position, open_positions
 from utils import (
     calculate_tp_sl,
@@ -25,10 +29,11 @@ def check_entry(symbol):
     if len(klines) < 2:
         return
 
-    opening_candle = klines[-2]
-    open_high = float(opening_candle[2])
-    open_low = float(opening_candle[3])
+    open_high = float(klines[-2][2])
+    open_low = float(klines[-2][3])
     price = get_price(symbol)
+    if price is None:
+        return
 
     if price > open_high:
         side = "BUY"
@@ -47,11 +52,14 @@ def check_entry(symbol):
     resp = place_market_order(symbol, side, qty)
     entry_price = extract_entry_price(resp)
     if entry_price is None:
-        print(f"[ORB] {symbol} 주문 실패: {resp}")
+        print(f"[ORB] {symbol} 주문 실패")
         return
 
-    add_position(symbol, entry_price, "orb", direction, qty)
     tp, sl = calculate_tp_sl(entry_price, ORB_TP_PERCENT, ORB_SL_PERCENT, direction)
+    create_take_profit(symbol, "SELL" if direction == "long" else "BUY", qty, tp)
+    create_stop_order(symbol, "SELL" if direction == "long" else "BUY", qty, sl)
+
+    add_position(symbol, entry_price, "orb", direction, qty)
 
     log_trade({
         "time": now_string(),
@@ -65,7 +73,6 @@ def check_entry(symbol):
         "status": "entry"
     })
 
-    # ✅ 텔레그램 진입 알림
     message = (
         f"✅ 진입: {symbol} ({direction}) @ {entry_price:.2f}\n"
         f"전략: ORB | 수량: {qty}\n"
@@ -82,6 +89,8 @@ def check_exit(symbol):
     entry_price = pos["entry_price"]
     side = pos["side"]
     price = get_price(symbol)
+    if price is None:
+        return
 
     tp, sl = calculate_tp_sl(entry_price, ORB_TP_PERCENT, ORB_SL_PERCENT, side)
     should_exit = False
@@ -114,14 +123,10 @@ def check_exit(symbol):
             "status": "exit"
         })
 
-        # ✅ 텔레그램 청산 알림 + 누적 통계
         pl = (price - entry_price) * qty if side == "long" else (entry_price - price) * qty
         emoji = "🟢" if pl >= 0 else "🔴"
-        result_msg = (
+        send_telegram(
             f"{emoji} 청산: {symbol} ({side}) @ {price:.2f}\n"
             f"손익: {pl:.2f} USDT | 전략: ORB"
         )
-        send_telegram(result_msg)
-
-        summary = summarize_trades()
-        send_telegram(summary)
+        send_telegram(summarize_trades())

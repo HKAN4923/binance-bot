@@ -1,6 +1,9 @@
 # strategy_ema_cross.py
-from datetime import datetime, timedelta
-from binance_api import get_price, get_klines, place_market_order, place_market_exit
+from binance_api import (
+    get_price, get_klines,
+    place_market_order, place_market_exit,
+    create_take_profit, create_stop_order
+)
 from position_manager import can_enter, add_position, remove_position, open_positions
 from utils import (
     calculate_tp_sl,
@@ -32,7 +35,7 @@ def check_entry(symbol):
     ema9_now = calculate_ema(closes[-20:], 9)
     ema21_now = calculate_ema(closes[-20:], 21)
     rsi = calculate_rsi(closes[-15:], 14)
-    price = closes[-1]  # 🔍 사용 안 하더라도 유지 가능
+    price = closes[-1]
 
     if ema9_prev < ema21_prev and ema9_now > ema21_now and rsi > 50:
         direction = "long"
@@ -51,11 +54,14 @@ def check_entry(symbol):
     resp = place_market_order(symbol, side, qty)
     entry_price = extract_entry_price(resp)
     if entry_price is None:
-        print(f"[EMA] {symbol} 주문 실패: {resp}")
+        print(f"[EMA] {symbol} 주문 실패")
         return
 
-    add_position(symbol, entry_price, "ema", direction, qty)
     tp, sl = calculate_tp_sl(entry_price, EMA_TP_PERCENT, EMA_SL_PERCENT, direction)
+    create_take_profit(symbol, "SELL" if direction == "long" else "BUY", qty, tp)
+    create_stop_order(symbol, "SELL" if direction == "long" else "BUY", qty, sl)
+
+    add_position(symbol, entry_price, "ema", direction, qty)
 
     log_trade({
         "time": now_string(),
@@ -69,7 +75,6 @@ def check_entry(symbol):
         "status": "entry"
     })
 
-    # ✅ 텔레그램 진입 알림
     message = (
         f"✅ 진입: {symbol} ({direction}) @ {entry_price:.2f}\n"
         f"전략: EMA | 수량: {qty}\n"
@@ -85,6 +90,8 @@ def check_exit(symbol):
     entry_price = pos["entry_price"]
     side = pos["side"]
     price = get_price(symbol)
+    if price is None:
+        return
 
     tp, sl = calculate_tp_sl(entry_price, EMA_TP_PERCENT, EMA_SL_PERCENT, side)
     should_exit = False
@@ -114,14 +121,10 @@ def check_exit(symbol):
             "status": "exit"
         })
 
-        # ✅ 텔레그램 청산 알림 + 누적 통계
         pl = (price - entry_price) * qty if side == "long" else (entry_price - price) * qty
         emoji = "🟢" if pl >= 0 else "🔴"
-        result_msg = (
+        send_telegram(
             f"{emoji} 청산: {symbol} ({side}) @ {price:.2f}\n"
             f"손익: {pl:.2f} USDT | 전략: EMA"
         )
-        send_telegram(result_msg)
-
-        summary = summarize_trades()
-        send_telegram(summary)
+        send_telegram(summarize_trades())

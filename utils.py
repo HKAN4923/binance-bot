@@ -1,122 +1,25 @@
+# utils.py
 import time
-from datetime import datetime,timedelta
-from binance_api import get_symbol_min_qty
-
+from datetime import datetime
+from binance_api import get_futures_balance, get_price, get_lot_size
+from risk_config import POSITION_RATIO, LEVERAGE, MIN_NOTIONAL
 
 def now_string():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-def apply_slippage(price, side, slippage_pct=0.001):
-    if side == "BUY":
-        return round(price * (1 + slippage_pct), 2)
+def calculate_tp_sl(entry_price, tp_percent, sl_percent, direction):
+    if direction == "long":
+        tp = entry_price * (1 + tp_percent / 100)
+        sl = entry_price * (1 - sl_percent / 100)
     else:
-        return round(price * (1 - slippage_pct), 2)
+        tp = entry_price * (1 - tp_percent / 100)
+        sl = entry_price * (1 + sl_percent / 100)
+    return round(tp, 4), round(sl, 4)
 
-def calculate_quantity(usdt_balance, price, leverage, symbol):
-    try:
-        notional = usdt_balance * leverage
-        qty = notional / price
-        min_qty = get_symbol_min_qty(symbol)
-        if min_qty is None or qty < float(min_qty):
-            return 0
-        precision = len(min_qty.split('.')[-1])
-        return round(qty, precision)
-    except Exception as e:
-        print(f"[수량 계산 오류] {symbol}: {e}")
-        return 0
-
-def calculate_tp_sl(entry_price, side, rr_ratio=2.0, sl_pct=0.01):
-    if side == "BUY":
-        stop_loss = round(entry_price * (1 - sl_pct), 2)
-        take_profit = round(entry_price * (1 + sl_pct * rr_ratio), 2)
-    else:
-        stop_loss = round(entry_price * (1 + sl_pct), 2)
-        take_profit = round(entry_price * (1 - sl_pct * rr_ratio), 2)
-    return take_profit, stop_loss
-
-def to_kst(timestamp):
-    """UTC timestamp → KST datetime"""
-    return datetime.utcfromtimestamp(timestamp) + timedelta(hours=9)
-
-def summarize_trades():
-    try:
-        with open("trades.log", "r") as f:
-            lines = f.readlines()
-
-        total = len(lines)
-        wins = sum(1 for line in lines if "'reason': 'TP'" in line)
-        losses = sum(1 for line in lines if "'reason': 'SL'" in line)
-        pnl_sum = 0.0
-
-        for line in lines:
-            if "'exit_price':" in line and "'entry_price':" in line:
-                try:
-                    entry = float(line.split("'entry_price':")[1].split(",")[0])
-                    exit_ = float(line.split("'exit_price':")[1].split(",")[0])
-                    size = float(line.split("'position_size':")[1].split(",")[0]) if "'position_size':" in line else 1
-                    direction = line.split("'side':")[1].split(",")[0].strip().strip("'")
-                    diff = (exit_ - entry) if direction == "long" else (entry - exit_)
-                    pnl_sum += diff * size
-                except Exception:
-                    pass
-
-        win_rate = (wins / total * 100) if total else 0
-
-        summary = (
-            f"📊 누적 요약\n"
-            f"▶ 총 트레이드: {total}\n"
-            f"▶ 승: {wins} / 패: {losses} / 승률: {win_rate:.1f}%\n"
-            f"▶ 누적 수익: {pnl_sum:.2f} USDT"
-        )
-        return summary
-
-    except FileNotFoundError:
-        return "📊 트레이드 로그 없음"
-
-def log_trade(data):
-    try:
-        with open("trades.log", "a") as f:
-            f.write(str(data) + "\n")
-    except Exception as e:
-        print(f"[로그 저장 오류] {e}")
-
-import math
-from binance_api import get_price, get_futures_balance, get_lot_size
-from risk_config import POSITION_RATIO, LEVERAGE
-
-def calculate_order_quantity(symbol):
-    try:
-        price = get_price(symbol)
-        if price is None or price == 0:
-            print(f"[{symbol}] 가격 조회 실패")
-            return 0
-
-        balance = get_futures_balance()
-        base_value = balance * POSITION_RATIO
-        order_value = base_value * LEVERAGE
-        qty = order_value / price
-
-        step_size = get_lot_size(symbol)
-        if step_size is None:
-            print(f"[{symbol}] 최소 수량 정보 없음")
-            return 0
-
-        precision = abs(int(round(-1 * math.log10(step_size))))
-        final_qty = round(qty, precision)
-        notional = final_qty * price
-
-        if final_qty < step_size:
-            print(f"[{symbol}] 수량 부족 → {final_qty} < {step_size}")
-            return 0
-
-        if notional < 20:
-            print(f"[{symbol}] 금액 부족 → ${notional:.2f} < $20")
-            return 0
-
-        return final_qty
-    except Exception as e:
-        print(f"[{symbol}] 수량 계산 오류: {e}")
-        return 0
+def log_trade(info: dict):
+    print("🧾 TRADE LOG")
+    for k, v in info.items():
+        print(f"{k}: {v}")
 
 def extract_entry_price(order_resp):
     try:
@@ -131,24 +34,38 @@ def extract_entry_price(order_resp):
         print(f"[extract_entry_price 오류] {e}")
         return None
 
-def calculate_rsi(closes, period=14):
-    if len(closes) < period + 1:
-        return 50  # 데이터 부족 시 중립값 반환
+def get_current_time_kst():
+    return datetime.utcfromtimestamp(time.time() + 9 * 60 * 60)
 
-    gains = []
-    losses = []
-    for i in range(1, period + 1):
-        change = closes[i] - closes[i - 1]
-        if change > 0:
-            gains.append(change)
-        else:
-            losses.append(abs(change))
+def calculate_order_quantity(symbol):
+    balance = get_futures_balance()
+    price = get_price(symbol)
+    lot_size = get_lot_size(symbol)
+    
+    if balance is None or price is None or lot_size is None:
+        print(f"[{symbol}] 계산 불가: 잔고={balance}, 가격={price}, 로트={lot_size}")
+        return 0
 
-    average_gain = sum(gains) / period if gains else 0
-    average_loss = sum(losses) / period if losses else 0
+    order_value = balance * POSITION_RATIO * LEVERAGE
+    qty = order_value / price
 
-    if average_loss == 0:
-        return 100
-    rs = average_gain / average_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    # 최소 수량 기준 반영
+    min_qty = lot_size["minQty"]
+    step_size = lot_size["stepSize"]
+
+    # step_size 반올림
+    precision = abs(round(float(step_size)).as_integer_ratio()[1].bit_length() - 1)
+    qty = max(min_qty, round(qty, precision))
+
+    notional = qty * price
+    if notional < MIN_NOTIONAL:
+        print(f"[{symbol}] 금액 부족 → ${notional:.2f} < ${MIN_NOTIONAL}")
+        return 0
+
+    return qty
+
+# 누적 요약 메시지
+def summarize_trades():
+    from trade_summary import get_trade_summary  # 순환참조 방지
+    total, wins, losses, win_rate, total_pl = get_trade_summary()
+    return f"📊 총 {total}회 | {wins}승 {losses}패 | 승률: {win_rate:.1f}%\n누적 손익: {total_pl:+.2f} USDT"
