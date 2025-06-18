@@ -1,99 +1,49 @@
-# strategy_pullback.py
-from datetime import datetime, timedelta
-from binance_api import get_price, get_klines, place_market_order, place_market_exit
-from position_manager import can_enter, add_position, remove_position, open_positions
-from utils import (
-    calculate_tp_sl,
-    log_trade,
-    now_string,
-    calculate_order_quantity,
-    extract_entry_price,
-)
-from risk_config import PULLBACK_TP_PERCENT, PULLBACK_SL_PERCENT
+from utils import calculate_quantity, apply_slippage, calculate_tp_sl, now_string
+from binance_api import client
+from position_manager import add_position, remove_position, get_open_positions
+from risk_config import MAX_POSITIONS, TRADE_AMOUNT_RATIO, LEVERAGE, FILTER_RATIO
 
-def calculate_ema(values, length):
-    k = 2 / (length + 1)
-    ema = values[0]
-    for price in values[1:]:
-        ema = price * k + ema * (1 - k)
-    return ema
+import time
+
+entry_record = {}
 
 def check_entry(symbol):
-    if not can_enter(symbol, "pullback"):
+    if symbol in get_open_positions():
         return
 
-    candles = get_klines(symbol, interval="5m", limit=30)
-    closes = [float(c[4]) for c in candles]
-    ema21 = calculate_ema(closes[-22:], 21)
-    price = closes[-1]
-    prev_price = closes[-2]
-
-    if prev_price < ema21 < price:
-        direction = "long"
-        side = "BUY"
-    elif prev_price > ema21 > price:
-        direction = "short"
-        side = "SELL"
-    else:
+    candles = client.futures_klines(symbol=symbol, interval="5m", limit=10)
+    if len(candles) < 3:
         return
 
-    qty = calculate_order_quantity(symbol)
-    if qty <= 0:
-        print(f"[Pullback] {symbol} 주문 스킵: 수량(qty)={qty}")
-        return
+    c1 = float(candles[-3][4])
+    c2 = float(candles[-2][4])
+    c3 = float(candles[-1][4])
 
-    resp = place_market_order(symbol, side, qty)
-    entry_price = extract_entry_price(resp)
-    if entry_price is None:
-        print(f"[Pullback] {symbol} 주문 실패: {resp}")
-        return
+    if c1 < c2 and c2 > c3:
+        price = float(candles[-1][4])
+        balance = float(client.futures_account_balance()[1]["balance"])
+        qty = calculate_quantity(balance * TRADE_AMOUNT_RATIO, price, LEVERAGE, symbol)
+        if qty == 0 or len(get_open_positions()) >= MAX_POSITIONS:
+            return
 
-    add_position(symbol, entry_price, "pullback", direction, qty)
-    tp, sl = calculate_tp_sl(entry_price, PULLBACK_TP_PERCENT, PULLBACK_SL_PERCENT, direction)
+        slippage_price = apply_slippage(price, "SELL")
+        tp, sl = calculate_tp_sl(slippage_price, "SELL")
 
-    log_trade({
-        "time": now_string(),
-        "symbol": symbol,
-        "strategy": "pullback",
-        "side": direction,
-        "entry_price": entry_price,
-        "tp": tp,
-        "sl": sl,
-        "status": "entry"
-    })
+        client.futures_create_order(symbol=symbol, side="SELL", type="MARKET", quantity=qty)
+        add_position(symbol, "SELL", slippage_price, qty, "Pullback")
+        client.futures_create_order(symbol=symbol, side="BUY", type="TAKE_PROFIT_MARKET", stopPrice=tp, closePosition=True)
+        client.futures_create_order(symbol=symbol, side="BUY", type="STOP_MARKET", stopPrice=sl, closePosition=True)
+        entry_record[symbol] = time.time()
+        print(f"[{now_string()}][Pullback 진입] {symbol} 가격: {slippage_price}")
 
 def check_exit(symbol):
-    if symbol not in open_positions or open_positions[symbol]["strategy"] != "pullback":
+    if symbol not in get_open_positions():
+        return
+    if get_open_positions()[symbol]["strategy"] != "Pullback":
         return
 
-    pos = open_positions[symbol]
-    entry_price = pos["entry_price"]
-    side = pos["side"]
-    price = get_price(symbol)
-
-    tp, sl = calculate_tp_sl(entry_price, PULLBACK_TP_PERCENT, PULLBACK_SL_PERCENT, side)
-    should_exit = False
-    reason = ""
-
-    if (side == "long" and price >= tp) or (side == "short" and price <= tp):
-        reason = "TP"
-        should_exit = True
-    elif (side == "long" and price <= sl) or (side == "short" and price >= sl):
-        reason = "SL"
-        should_exit = True
-
-    if should_exit:
-        qty = pos["position_size"]
-        place_market_exit(symbol, "SELL" if side == "long" else "BUY", qty)
+    if time.time() - entry_record.get(symbol, 0) > 60 * 180:
+        qty = get_open_positions()[symbol]["qty"]
+        client.futures_create_order(symbol=symbol, side="BUY", type="MARKET", quantity=qty)
         remove_position(symbol)
-
-        log_trade({
-            "time": now_string(),
-            "symbol": symbol,
-            "strategy": "pullback",
-            "side": side,
-            "exit_price": price,
-            "entry_price": entry_price,
-            "reason": reason,
-            "status": "exit"
-        })
+        print(f"[{now_string()}][Pullback 청산] {symbol} 시간 초과 청산")

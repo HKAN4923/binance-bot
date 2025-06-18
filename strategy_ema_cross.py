@@ -1,113 +1,56 @@
-# strategy_ema_cross.py
-from datetime import datetime, timedelta
-from binance_api import get_price, get_klines, place_market_order, place_market_exit
-from position_manager import can_enter, add_position, remove_position, open_positions
-from utils import (
-    calculate_tp_sl,
-    log_trade,
-    now_string,
-    calculate_order_quantity,
-    extract_entry_price,
-)
-from risk_config import EMA_TP_PERCENT, EMA_SL_PERCENT
+from utils import calculate_quantity, apply_slippage, calculate_tp_sl, now_string
+from binance_api import client
+from position_manager import add_position, remove_position, get_open_positions
+from risk_config import MAX_POSITIONS, TRADE_AMOUNT_RATIO, LEVERAGE, FILTER_RATIO
 
-def calculate_ema(values, length):
+import time
+
+entry_record = {}
+
+def calculate_ema(data, length):
     k = 2 / (length + 1)
-    ema = values[0]
-    for price in values[1:]:
+    ema = float(data[0][4])
+    for candle in data[1:]:
+        price = float(candle[4])
         ema = price * k + ema * (1 - k)
     return ema
 
-def calculate_rsi(values, period=14):
-    deltas = [values[i+1] - values[i] for i in range(len(values)-1)]
-    gains = [d for d in deltas if d > 0]
-    losses = [-d for d in deltas if d < 0]
-    avg_gain = sum(gains[-period:]) / period if gains else 0
-    avg_loss = sum(losses[-period:]) / period if losses else 0
-    if avg_loss == 0:
-        return 100
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
 def check_entry(symbol):
-    if not can_enter(symbol, "ema"):
+    if symbol in get_open_positions():
         return
 
-    candles = get_klines(symbol, interval="5m", limit=30)
-    closes = [float(c[4]) for c in candles]
-    ema9_prev = calculate_ema(closes[-21:-1], 9)
-    ema21_prev = calculate_ema(closes[-21:-1], 21)
-    ema9_now = calculate_ema(closes[-20:], 9)
-    ema21_now = calculate_ema(closes[-20:], 21)
-    rsi = calculate_rsi(closes[-15:], 14)
-    price = closes[-1]
-
-    if ema9_prev < ema21_prev and ema9_now > ema21_now and rsi > 50:
-        direction = "long"
-        side = "BUY"
-    elif ema9_prev > ema21_prev and ema9_now < ema21_now and rsi < 50:
-        direction = "short"
-        side = "SELL"
-    else:
+    candles = client.futures_klines(symbol=symbol, interval="5m", limit=30)
+    if len(candles) < 21:
         return
 
-    qty = calculate_order_quantity(symbol)
-    if qty <= 0:
-        print(f"[EMA] {symbol} 주문 스킵: 수량(qty)={qty}")
-        return
+    ema9 = calculate_ema(candles[-10:], 9)
+    ema21 = calculate_ema(candles[-22:], 21)
 
-    resp = place_market_order(symbol, side, qty)
-    entry_price = extract_entry_price(resp)
-    if entry_price is None:
-        print(f"[EMA] {symbol} 주문 실패: {resp}")
-        return
+    if ema9 > ema21:
+        price = float(candles[-1][4])
+        balance = float(client.futures_account_balance()[1]["balance"])
+        qty = calculate_quantity(balance * TRADE_AMOUNT_RATIO, price, LEVERAGE, symbol)
+        if qty == 0 or len(get_open_positions()) >= MAX_POSITIONS:
+            return
 
-    add_position(symbol, entry_price, "ema", direction, qty)
-    tp, sl = calculate_tp_sl(entry_price, EMA_TP_PERCENT, EMA_SL_PERCENT, direction)
+        slippage_price = apply_slippage(price, "BUY")
+        tp, sl = calculate_tp_sl(slippage_price, "BUY")
 
-    log_trade({
-        "time": now_string(),
-        "symbol": symbol,
-        "strategy": "ema",
-        "side": direction,
-        "entry_price": entry_price,
-        "tp": tp,
-        "sl": sl,
-        "status": "entry"
-    })
+        client.futures_create_order(symbol=symbol, side="BUY", type="MARKET", quantity=qty)
+        add_position(symbol, "BUY", slippage_price, qty, "EMA")
+        client.futures_create_order(symbol=symbol, side="SELL", type="TAKE_PROFIT_MARKET", stopPrice=tp, closePosition=True)
+        client.futures_create_order(symbol=symbol, side="SELL", type="STOP_MARKET", stopPrice=sl, closePosition=True)
+        entry_record[symbol] = time.time()
+        print(f"[{now_string()}][EMA 진입] {symbol} 가격: {slippage_price}")
 
 def check_exit(symbol):
-    if symbol not in open_positions or open_positions[symbol]["strategy"] != "ema":
+    if symbol not in get_open_positions():
+        return
+    if get_open_positions()[symbol]["strategy"] != "EMA":
         return
 
-    pos = open_positions[symbol]
-    entry_price = pos["entry_price"]
-    side = pos["side"]
-    price = get_price(symbol)
-
-    tp, sl = calculate_tp_sl(entry_price, EMA_TP_PERCENT, EMA_SL_PERCENT, side)
-    should_exit = False
-    reason = ""
-
-    if (side == "long" and price >= tp) or (side == "short" and price <= tp):
-        reason = "TP"
-        should_exit = True
-    elif (side == "long" and price <= sl) or (side == "short" and price >= sl):
-        reason = "SL"
-        should_exit = True
-
-    if should_exit:
-        qty = pos["position_size"]
-        place_market_exit(symbol, "SELL" if side == "long" else "BUY", qty)
+    if time.time() - entry_record.get(symbol, 0) > 60 * 180:
+        qty = get_open_positions()[symbol]["qty"]
+        client.futures_create_order(symbol=symbol, side="SELL", type="MARKET", quantity=qty)
         remove_position(symbol)
-
-        log_trade({
-            "time": now_string(),
-            "symbol": symbol,
-            "strategy": "ema",
-            "side": side,
-            "exit_price": price,
-            "entry_price": entry_price,
-            "reason": reason,
-            "status": "exit"
-        })
+        print(f"[{now_string()}][EMA 청산] {symbol} 시간 초과 청산")
