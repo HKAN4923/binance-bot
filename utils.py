@@ -1,6 +1,7 @@
 import time
-from datetime import datetime
+from datetime import datetime,timedelta
 from binance_api import get_symbol_min_qty
+
 
 def now_string():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -32,3 +33,7 @@ def calculate_tp_sl(entry_price, side, rr_ratio=2.0, sl_pct=0.01):
         stop_loss = round(entry_price * (1 + sl_pct), 2)
         take_profit = round(entry_price * (1 - sl_pct * rr_ratio), 2)
     return take_profit, stop_loss
+
+def to_kst(timestamp):
+    """UTC timestamp → KST datetime"""
+    return datetime.utcfromtimestamp(timestamp) + timedelta(hours=9)
