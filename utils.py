@@ -74,3 +74,7 @@ def calculate_rsi(closes, period=14):
     rs = average_gain / average_loss
     rsi = 100 - (100 / (1 + rs))
     return rsi
+
+def summarize_trades():
+    # TODO: 실제 손익 데이터를 기반으로 통계 요약
+    return "📊 누적 손익 요약 기능은 준비 중입니다."
