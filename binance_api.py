@@ -20,6 +20,14 @@ def get_price(symbol):
         print(f"[가격 조회 실패] {symbol}: {e}")
         return None
 
+def get_klines(symbol, interval="1h", limit=100):
+    try:
+        return client.futures_klines(symbol=symbol, interval=interval, limit=limit)
+    except Exception as e:
+        print(f"[캔들 조회 오류] {symbol}: {e}")
+        return []
+
+
 def get_futures_balance():
     try:
         balances = client.futures_account_balance()
