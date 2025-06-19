@@ -47,29 +47,40 @@ def get_lot_size(symbol: str) -> float:
         logging.error(f"[수량 단위 조회 오류] {symbol}: {e}")
     return 0.0
 
+from decimal import Decimal, ROUND_DOWN
+
 def calculate_order_quantity(symbol: str) -> float:
-    """ 
+    """
     포지션 비율(POSITION_RATIO)과 레버리지(LEVERAGE)를 적용해
     최적 주문 수량을 계산합니다. 최소 Notional 기준(MIN_NOTIONAL) 미달 시 0 반환.
     """
-    balance = Decimal(str(get_futures_balance()))  # 🔄 float → Decimal 변환
-    amount = balance * POSITION_RATIO * Decimal(LEVERAGE)
-    price = client.futures_symbol_ticker(symbol=symbol)["price"]
+    # 모든 값 Decimal로 변환
+    balance = Decimal(str(get_futures_balance()))
+    position_ratio = Decimal(str(POSITION_RATIO))
+    leverage = Decimal(str(LEVERAGE))
+    min_notional = Decimal(str(MIN_NOTIONAL))
+
+    amount = balance * position_ratio * leverage
+
     try:
-        price = float(price)
+        price = Decimal(str(client.futures_symbol_ticker(symbol=symbol)["price"]))
     except:
         return 0.0
 
-    raw_qty = Decimal(amount) / Decimal(price)
-    # Binance가 허용하는 소수점 자릿수로 반내림
+    raw_qty = amount / price
+
     step = Decimal(str(get_lot_size(symbol)))
+    if step <= 0:
+        return 0.0
+
     precision = -step.as_tuple().exponent
     quant = Decimal(f"1e-{precision}")
     qty = raw_qty.quantize(quant, rounding=ROUND_DOWN)
 
-    # 최소 Notional 미달 또는 qty 0 이면 진입 불가
-    if qty <= 0 or float(qty) * price < MIN_NOTIONAL:
+    # 최소 거래 금액 미달 또는 0이면 무시
+    if qty <= 0 or (qty * price) < min_notional:
         return 0.0
+
     return float(qty)
 
 def extract_entry_price(resp: dict) -> float:
