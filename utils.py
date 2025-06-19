@@ -70,7 +70,9 @@ def calculate_order_quantity(symbol: str) -> float:
         quant = Decimal(f"1e-{precision}")
         qty = raw_qty.quantize(quant, rounding=ROUND_DOWN)
 
-        if qty <= 0 or (qty * price) < min_notional:
+        # 최소 거래 금액 미달 또는 0이면 무시
+        notional = qty * price
+        if qty <= Decimal("0") or notional < min_notional:
             return 0.0
 
         return float(qty)
@@ -78,6 +80,7 @@ def calculate_order_quantity(symbol: str) -> float:
     except Exception as e:
         logging.error(f"[수량 계산 오류] {symbol}: {e}")
         return 0.0
+
 
 
 def extract_entry_price(resp: dict) -> float:

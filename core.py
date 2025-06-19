@@ -66,7 +66,8 @@ from utils import (
     calculate_order_quantity,
     log_trade,
     summarize_trades,
-    get_filtered_top_symbols
+    get_filtered_top_symbols,
+    calculate_order_quantity
 )
 
 from position_manager import (
