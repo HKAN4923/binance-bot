@@ -101,4 +101,4 @@ __all__ = [
     "send_telegram"
 ]
 
-from binance_client import cancel_all_orders_for_symbol
+from binance_client import cancel_all_orders_for_symbol,place_market_order

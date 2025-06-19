@@ -21,6 +21,7 @@ from core import (
     send_telegram
 )
 
+from decimal import Decimal
 
 def handle_entry(signal: dict) -> None:
     """
