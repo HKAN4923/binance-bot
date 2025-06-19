@@ -48,12 +48,12 @@ def get_lot_size(symbol: str) -> float:
     return 0.0
 
 def calculate_order_quantity(symbol: str) -> float:
-    """
+    """ 
     포지션 비율(POSITION_RATIO)과 레버리지(LEVERAGE)를 적용해
     최적 주문 수량을 계산합니다. 최소 Notional 기준(MIN_NOTIONAL) 미달 시 0 반환.
     """
-    balance = get_futures_balance()
-    amount = balance * POSITION_RATIO * LEVERAGE
+    balance = Decimal(str(get_futures_balance()))  # 🔄 float → Decimal 변환
+    amount = balance * POSITION_RATIO * Decimal(LEVERAGE)
     price = client.futures_symbol_ticker(symbol=symbol)["price"]
     try:
         price = float(price)
