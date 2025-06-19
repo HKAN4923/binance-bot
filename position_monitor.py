@@ -11,13 +11,10 @@ from config import MAX_TRADE_DURATION, EMERGENCY_PERIOD, EMERGENCY_DROP_PERCENT
 from utils import get_futures_balance as get_position_balance
 
 
-from core import (
-    get_open_positions,
-    get_position,
-    send_telegram,
-    place_market_exit,
-    cancel_all_orders_for_symbol
-)
+from position_manager import get_open_positions, get_position
+from telegram_bot import send_telegram
+from binance_client import place_market_exit, cancel_all_orders_for_symbol
+
 
 
 class PositionMonitor(threading.Thread):

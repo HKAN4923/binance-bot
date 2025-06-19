@@ -99,3 +99,12 @@ def create_stop_order(symbol: str, side: str, stop_price: float) -> dict:
     except BinanceAPIException as e:
         print(f"[SL 주문 오류] {symbol}: {e}")
         return {}
+
+def cancel_all_orders_for_symbol(symbol: str):
+    """
+    해당 심볼의 모든 미체결 주문 취소
+    """
+    try:
+        client.futures_cancel_all_open_orders(symbol=symbol)
+    except Exception as e:
+        print(f"[주문 취소 오류] {symbol}: {e}")

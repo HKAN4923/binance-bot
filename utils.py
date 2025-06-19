@@ -115,3 +115,18 @@ def get_filtered_top_symbols(n: int = 100) -> list:
         else:
             logging.warning(f"[심볼 필터링] {sym} 제거 (minQty 정보 없음)")  
     return result
+
+from datetime import datetime, timezone, timedelta
+
+def to_kst(timestamp=None) -> datetime:
+    """
+    UTC timestamp 또는 datetime 객체를 KST로 변환
+    """
+    kst = timezone(timedelta(hours=9))
+    if timestamp is None:
+        return datetime.now(tz=kst)
+    if isinstance(timestamp, (int, float)):
+        return datetime.fromtimestamp(timestamp, tz=kst)
+    if isinstance(timestamp, datetime):
+        return timestamp.astimezone(kst)
+    raise ValueError("지원되지 않는 timestamp 형식입니다.")

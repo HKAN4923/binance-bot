@@ -83,6 +83,7 @@ __all__ = [
     "create_limit_order",
     "place_market_order",
     "place_market_exit",
+    "cancel_all_orders_for_symbol",
     "get_price",
     "get_klines",
     "create_take_profit",
@@ -98,3 +99,5 @@ __all__ = [
     "get_position",
     "send_telegram"
 ]
+
+from binance_client import cancel_all_orders_for_symbol
