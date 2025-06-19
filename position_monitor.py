@@ -8,7 +8,8 @@ from collections import deque
 from decimal import Decimal
 
 from config import MAX_TRADE_DURATION, EMERGENCY_PERIOD, EMERGENCY_DROP_PERCENT
-from binance_client import get_balance as get_position_balance
+from binance_client import get_futures_balance as get_position_balance
+
 from core import (
     get_open_positions,
     get_position,
