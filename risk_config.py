@@ -13,7 +13,7 @@ POSITION_RATIO = Decimal(os.getenv("POSITION_RATIO", "0.2"))
 # 사용 레버리지 (예: 10배)
 LEVERAGE = int(os.getenv("LEVERAGE", "10"))
 # 최소 거래 가치(USDT 단위)
-MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL", "10"))
+MIN_NOTIONAL = Decimal(os.getenv("MIN_NOTIONAL", "10"))
 
 # ───────────── ORB 전략 파라미터 ─────────────
 # 익절 비율(%)
