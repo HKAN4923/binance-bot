@@ -1,106 +1,143 @@
-# order_manager.py
-from binance_api import (
-    client,
+# 파일명: order_manager.py
+# 중앙 주문 처리 모듈
+# core.py에 정의된 함수·클래스를 활용하여
+# 지정가 진입 → 체결 확인 → TP/SL 설정 → 포지션 등록 과정을 수행합니다.
+
+import time
+from binance_client import client, cancel_all_orders_for_symbol
+from core import (
+    create_limit_order,
     place_market_order,
     place_market_exit,
-    get_price
+    get_price,
+    create_take_profit,
+    create_stop_order,
+    calculate_order_quantity,
+    log_trade,
+    summarize_trades,
+    can_enter,
+    add_position,
+    remove_position,
+    send_telegram
 )
-from utils import calculate_tp_sl, extract_entry_price, now_string, summarize_trades, log_trade
-from position_manager import add_position, remove_position
-from telegram_bot import send_telegram
 
-def create_take_profit(symbol, side, stop_price):
-    try:
-        return client.futures_create_order(
-            symbol=symbol,
-            side=side,
-            type="TAKE_PROFIT_MARKET",
-            stopPrice=stop_price,
-            closePosition=True
-        )
-    except Exception as e:
-        print(f"[TP 주문 오류] {symbol}: {e}")
-        return {}
 
-def create_stop_order(symbol, side, stop_price):
-    try:
-        return client.futures_create_order(
-            symbol=symbol,
-            side=side,
-            type="STOP_MARKET",
-            stopPrice=stop_price,
-            closePosition=True
-        )
-    except Exception as e:
-        print(f"[SL 주문 오류] {symbol}: {e}")
-        return {}
+def handle_entry(signal: dict) -> None:
+    """
+    signal 구조:
+      {
+        'symbol': str,
+        'side': 'BUY' or 'SELL',
+        'direction': 'long' or 'short',
+        'strategy': str,
+        'qty': float,
+        'tp_percent': float,
+        'sl_percent': float
+      }
+    """
+    symbol = signal['symbol']
+    side = signal['side']
+    direction = signal['direction']
+    strategy = signal['strategy']
+    qty = signal['qty']
+    tp_percent = signal['tp_percent']
+    sl_percent = signal['sl_percent']
 
-def handle_entry(signal):
-    symbol = signal["symbol"]
-    side = signal["side"]
-    direction = signal["direction"]
-    strategy = signal["strategy"]
-    qty = signal["qty"]
-    tp_percent = signal["tp_percent"]
-    sl_percent = signal["sl_percent"]
-
-    resp = place_market_order(symbol, side, qty)
-    entry_price = extract_entry_price(resp)
-    if entry_price is None:
-        print(f"[{strategy.upper()}] {symbol} 주문 실패")
+    # 중복 진입 방지
+    if not can_enter(symbol, strategy):
         return
 
-    tp, sl = calculate_tp_sl(entry_price, tp_percent, sl_percent, direction)
+    # 1) 지정가 진입 주문
+    price = get_price(symbol)
+    entry_order = create_limit_order(symbol, side, qty, price)
+    if not entry_order or entry_order.get('orderId') is None:
+        send_telegram(f"⚠️ [{strategy.upper()}] {symbol} 지정가 주문 실패")
+        return
 
-    # ✅ closePosition 기반 TP/SL 주문
-    create_take_profit(symbol, "SELL" if direction == "long" else "BUY", tp)
-    create_stop_order(symbol, "SELL" if direction == "long" else "BUY", sl)
+    order_id = entry_order['orderId']
+    # 2) 체결 대기
+    time.sleep(1)
 
-    add_position(symbol, side=direction, entry_price=entry_price, qty=qty, strategy=strategy)
+    # 3) 체결 확인
+    try:
+        order_info = client.futures_get_order(symbol=symbol, orderId=order_id)
+    except Exception as e:
+        send_telegram(f"⚠️ [{strategy.upper()}] {symbol} 주문 확인 오류: {e}")
+        cancel_all_orders_for_symbol(symbol)
+        return
 
+    if order_info.get('status') != 'FILLED':
+        send_telegram(f"⚠️ [{strategy.upper()}] {symbol} 미체결, 주문 취소")
+        cancel_all_orders_for_symbol(symbol)
+        return
+
+    # 체결가 추출
+    entry_price = float(order_info.get('avgFillPrice', order_info.get('price', price)))
+
+    # 4) TP/SL 설정
+    if direction == 'long':
+        tp = entry_price * (1 + tp_percent / 100)
+        sl = entry_price * (1 - sl_percent / 100)
+    else:
+        tp = entry_price * (1 - tp_percent / 100)
+        sl = entry_price * (1 + sl_percent / 100)
+
+    tp_order = create_take_profit(symbol, 'SELL' if direction == 'long' else 'BUY', tp)
+    sl_order = create_stop_order(symbol, 'SELL' if direction == 'long' else 'BUY', sl)
+
+    if not tp_order or not sl_order:
+        send_telegram(f"⚠️ [{strategy.upper()}] {symbol} TP/SL 설정 실패, 진입 무효 처리")
+        cancel_all_orders_for_symbol(symbol)
+        return
+
+    # 5) 포지션 등록 및 로그
+    add_position(symbol, direction, entry_price, qty, strategy)
     log_trade({
-        "time": now_string(),
-        "symbol": symbol,
-        "strategy": strategy,
-        "side": direction,
-        "entry_price": entry_price,
-        "tp": tp,
-        "sl": sl,
-        "position_size": qty,
-        "status": "entry"
+        'symbol': symbol,
+        'strategy': strategy,
+        'side': direction,
+        'entry_price': entry_price,
+        'tp': tp,
+        'sl': sl,
+        'position_size': qty,
+        'status': 'entry'
     })
-
     send_telegram(
-        f"✅ 진입: {symbol} ({direction}) @ {entry_price:.2f}\n"
-        f"전략: {strategy.upper()} | 수량: {qty}\n"
-        f"TP: {tp:.2f} / SL: {sl:.2f}"
+        f"✅ [{strategy.upper()}] {symbol} 진입 성공 @ {entry_price:.4f}\n"
+        f"TP: {tp:.4f} / SL: {sl:.4f} | Qty: {qty}"
     )
 
-def handle_exit(symbol, strategy, direction, qty, entry_price, reason):
+
+def handle_exit(symbol: str, strategy: str, direction: str, qty: float, entry_price: float, reason: str) -> None:
+    """
+    포지션 청산 처리
+    """
+    # 현재가 조회
     price = get_price(symbol)
     if price is None:
         return
 
-    place_market_exit(symbol, "SELL" if direction == "long" else "BUY", qty)
+    # 시장가 청산
+    place_market_exit(symbol, 'SELL' if direction == 'long' else 'BUY', qty)
     remove_position(symbol)
 
-    pl = (price - entry_price) * qty if direction == "long" else (entry_price - price) * qty
-    emoji = "🟢" if pl >= 0 else "🔴"
+    # 손익 계산
+    if direction == 'long':
+        pl = (price - entry_price) * qty
+    else:
+        pl = (entry_price - price) * qty
 
+    # 로그 및 알림
     log_trade({
-        "time": now_string(),
-        "symbol": symbol,
-        "strategy": strategy,
-        "side": direction,
-        "exit_price": price,
-        "entry_price": entry_price,
-        "reason": reason,
-        "position_size": qty,
-        "status": "exit"
+        'symbol': symbol,
+        'strategy': strategy,
+        'side': direction,
+        'exit_price': price,
+        'entry_price': entry_price,
+        'reason': reason,
+        'position_size': qty,
+        'status': 'exit'
     })
-
-    send_telegram(
-        f"{emoji} 청산: {symbol} ({direction}) @ {price:.2f}\n"
-        f"손익: {pl:.2f} USDT | 전략: {strategy.upper()}"
-    )
+    emoji = '🟢' if pl >= 0 else '🔴'
+    send_telegram(f"{emoji} [{strategy.upper()}] {symbol} 청산 @ {price:.4f} | 손익: {pl:.2f} USDT")
     send_telegram(summarize_trades())

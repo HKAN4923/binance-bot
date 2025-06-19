@@ -1,16 +1,26 @@
-# strategy_orb.py
+# 파일명: strategy_orb.py
+# 라쉬케 전략: ORB (Opening Range Breakout)
+# core.py에서 정의된 공통 함수와 order_manager의 handle_entry/exit 사용
+
 from datetime import datetime, timedelta
-from binance_api import get_price, get_klines
-from utils import calculate_order_quantity
-from position_manager import can_enter, open_positions, get_position
+from core import (
+    get_klines,
+    get_price,
+    calculate_order_quantity,
+    can_enter,
+    get_open_positions,
+    get_position
+)
 from order_manager import handle_entry, handle_exit
 from risk_config import ORB_TP_PERCENT, ORB_SL_PERCENT, ORB_TIMECUT_HOURS
 
+# 진입 가능 시간 (KST 기준 09:00~10:00, 21:00~22:00)
 def is_entry_time_kst():
     now = datetime.utcnow() + timedelta(hours=9)
     return (now.hour == 9 and now.minute < 60) or (now.hour == 21 and now.minute < 60)
 
-def check_entry(symbol):
+# Entry 조건 검사
+def check_entry(symbol: str) -> None:
     if not is_entry_time_kst() or not can_enter(symbol, "orb"):
         return
 
@@ -48,8 +58,10 @@ def check_entry(symbol):
     }
     handle_entry(signal)
 
-def check_exit(symbol):
-    if symbol not in open_positions or open_positions[symbol]["strategy"] != "orb":
+# Exit 조건 검사
+def check_exit(symbol: str) -> None:
+    positions = get_open_positions()
+    if symbol not in positions or positions[symbol]["strategy"] != "orb":
         return
 
     pos = get_position(symbol)
@@ -66,15 +78,18 @@ def check_exit(symbol):
     should_exit = False
     reason = ""
 
+    # TP/SL 체크
     if (direction == "long" and price >= tp) or (direction == "short" and price <= tp):
         reason = "TP"
         should_exit = True
     elif (direction == "long" and price <= sl) or (direction == "short" and price >= sl):
         reason = "SL"
         should_exit = True
+    # TimeCut
     elif datetime.utcnow() - entry_time > timedelta(hours=ORB_TIMECUT_HOURS):
         reason = "TimeCut"
         should_exit = True
 
     if should_exit:
-        handle_exit(symbol, "orb", direction, pos["position_size"], entry_price, reason)
+        qty = pos.get("qty")
+        handle_exit(symbol, "orb", direction, qty, entry_price, reason)

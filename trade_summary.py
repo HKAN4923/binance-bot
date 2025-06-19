@@ -1,51 +1,75 @@
-# trade_summary.py
-import json
-import os
-from collections import defaultdict
-from utils import now_string
+# 파일명: trade_summary.py
+# 거래 요약 스케줄러 모듈
+# 일정 시각마다 누적 손익 요약을 텔레그램으로 전송합니다.
 
-LOG_FILE = "trade_log.json"
+import threading
+import time
+import logging
+import pandas as pd
+import matplotlib.pyplot as plt
+from utils import to_kst
+from telegram_bot import send_telegram, send_telegram_photo
+from config import SUMMARY_TIMES
 
-def load_logs():
-    if not os.path.exists(LOG_FILE):
-        return []
-    with open(LOG_FILE, "r") as f:
-        return json.load(f)
+# 모듈 내부에 거래 로그 관리
+trade_log = []
+trade_log_lock = threading.Lock()
 
-def summarize_trades():
-    logs = load_logs()
-    summary = defaultdict(lambda: {"win": 0, "loss": 0, "pl": 0.0})
-    total_win = total_loss = 0
 
-    for log in logs:
-        if log["status"] != "exit":
-            continue
-        strategy = log["strategy"]
-        entry = log["entry_price"]
-        exit_ = log["exit_price"]
-        size = log["position_size"]
-        side = log["side"]
+def add_trade_entry(entry: dict) -> None:
+    """메인 코드에서 trade_log 기록 시 호출"""
+    with trade_log_lock:
+        trade_log.append(entry)
 
-        pl = (exit_ - entry) * size if side == "long" else (entry - exit_) * size
-        summary[strategy]["pl"] += pl
-        if pl >= 0:
-            summary[strategy]["win"] += 1
-            total_win += 1
-        else:
-            summary[strategy]["loss"] += 1
-            total_loss += 1
 
-    msg = f"📊 누적 요약 ({now_string()})\n"
-    for strategy, stat in summary.items():
-        total = stat["win"] + stat["loss"]
-        winrate = (stat["win"] / total) * 100 if total > 0 else 0
-        msg += (
-            f"{strategy.upper()} ➤ {stat['win']}승 {stat['loss']}패 "
-            f"(승률: {winrate:.1f}%) / 누적손익: {stat['pl']:.2f}\n"
-        )
+def start_summary_scheduler() -> None:
+    """
+    SUMMARY_TIMES에 지정된 시각마다 요약 전송 스레드 시작
+    """
+    threading.Thread(target=_summary_loop, daemon=True).start()
 
-    total = total_win + total_loss
-    total_winrate = (total_win / total) * 100 if total > 0 else 0
-    total_pl = sum(stat["pl"] for stat in summary.values())
-    msg += f"📈 전체 ➤ {total_win}승 {total_loss}패 (승률: {total_winrate:.1f}%) / 누적손익: {total_pl:.2f}"
-    return msg
+
+def _summary_loop() -> None:
+    last_sent = None
+    while True:
+        try:
+            now = to_kst(time.time())
+            hour, minute = now.hour, now.minute
+            for (h, m) in SUMMARY_TIMES:
+                if hour == h and minute == m and last_sent != (h, m):
+                    with trade_log_lock:
+                        logs = list(trade_log)
+                    if logs:
+                        df = pd.DataFrame(logs)
+                        total_trades = len(df)
+                        win_trades = (df['pnl_usdt'] > 0).sum()
+                        lose_trades = total_trades - win_trades
+                        avg_pnl_pct = df['pnl_pct'].mean()
+                        total_pnl = df['pnl_usdt'].sum()
+                        # Equity Curve
+                        df['cumulative'] = df['pnl_usdt'].cumsum()
+                        img_path = f"equity_{h}_{m}.png"
+                        plt.figure()
+                        plt.plot(df['cumulative'])
+                        plt.title('Equity Curve')
+                        plt.xlabel('Trade Index')
+                        plt.ylabel('Cumulative PnL (USDT)')
+                        plt.savefig(img_path)
+                        plt.close()
+                        msg = (
+                            f"<b>🕒 Trade Summary {h:02d}:{m:02d}</b>\n"
+                            f"▶ Total Trades: {total_trades}\n"
+                            f"▶ Wins: {win_trades}\n"
+                            f"▶ Losses: {lose_trades}\n"
+                            f"▶ Avg PnL %: {avg_pnl_pct:.2f}\n"
+                            f"▶ Total PnL: {total_pnl:.2f} USDT"
+                        )
+                        send_telegram(msg)
+                        send_telegram_photo(img_path)
+                    else:
+                        send_telegram(f"<b>🕒 Trade Summary {h:02d}:{m:02d}</b>\nNo trades recorded.")
+                    last_sent = (h, m)
+            time.sleep(30)
+        except Exception as e:
+            logging.error(f"[Trade Summary 오류] {e}")
+            time.sleep(30)
