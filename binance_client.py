@@ -1,12 +1,11 @@
 # 파일명: binance_client.py
-# Binance API 호출 안정화 래퍼
 
 import os
+import logging
 from dotenv import load_dotenv
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 from decimal import Decimal, ROUND_DOWN
-import logging
 
 load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY")
@@ -74,6 +73,9 @@ def place_market_exit(symbol: str, side: str, quantity: float) -> dict:
 
 
 def create_limit_order(symbol: str, side: str, quantity: float, price: float) -> dict:
+    """
+    지정가 주문 (tickSize 기준 반내림 처리 포함)
+    """
     try:
         tick = Decimal(str(get_tick_size(symbol)))
         price_decimal = Decimal(str(price)).quantize(tick, rounding=ROUND_DOWN)
@@ -92,6 +94,9 @@ def create_limit_order(symbol: str, side: str, quantity: float, price: float) ->
 
 
 def create_take_profit(symbol: str, side: str, stop_price: float) -> dict:
+    """
+    TP 조건부 시장가 주문 (tickSize 기준 반내림)
+    """
     try:
         tick = Decimal(str(get_tick_size(symbol)))
         stop_decimal = Decimal(str(stop_price)).quantize(tick, rounding=ROUND_DOWN)
@@ -109,6 +114,9 @@ def create_take_profit(symbol: str, side: str, stop_price: float) -> dict:
 
 
 def create_stop_order(symbol: str, side: str, stop_price: float) -> dict:
+    """
+    SL 조건부 시장가 주문 (tickSize 기준 반내림)
+    """
     try:
         tick = Decimal(str(get_tick_size(symbol)))
         stop_decimal = Decimal(str(stop_price)).quantize(tick, rounding=ROUND_DOWN)
