@@ -19,7 +19,7 @@ from utils import (
 )
 
 # 포지션 관련 함수는 utils 또는 여기에 직접 정의되어 있다고 가정
-from position_manager import (
+from position_monitor import (
     can_enter,
     add_position,
     remove_position,
