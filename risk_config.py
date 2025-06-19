@@ -4,6 +4,8 @@
 import os
 from decimal import Decimal
 from dotenv import load_dotenv
+from decimal import Decimal
+
 
 load_dotenv()
 
