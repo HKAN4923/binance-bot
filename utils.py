@@ -132,3 +132,16 @@ def to_kst(timestamp=None) -> datetime:
     if isinstance(timestamp, datetime):
         return timestamp.astimezone(kst)
     raise ValueError("지원되지 않는 timestamp 형식입니다.")
+
+def get_tick_size(symbol: str) -> float:
+    """심볼별 최소 가격 단위(tickSize) 조회"""
+    try:
+        info = client.futures_exchange_info()
+        for s in info["symbols"]:
+            if s["symbol"] == symbol:
+                for f in s["filters"]:
+                    if f["filterType"] == "PRICE_FILTER":
+                        return float(f["tickSize"])
+    except Exception as e:
+        logging.error(f"[tickSize 조회 오류] {symbol}: {e}")
+    return 0.0
