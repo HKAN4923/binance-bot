@@ -7,8 +7,6 @@ from binance_client import (
     create_limit_order,
     place_market_order,
     place_market_exit,
-)
-from binance_api import (
     get_price,
     get_klines,
     create_take_profit,
@@ -23,13 +21,13 @@ from utils import (
     get_filtered_top_symbols
 )
 
-# 포지션 관리
-from position_manager import (
+# 포지션 관리 (core 기준 정의로 임시 대체 가능)
+from position_monitor import (
+    get_open_positions,
+    get_position,
     can_enter,
     add_position,
-    remove_position,
-    get_open_positions,
-    get_position
+    remove_position
 )
 
 # 알림
