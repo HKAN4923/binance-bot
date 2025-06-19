@@ -1,6 +1,6 @@
 # 파일명: strategy_orb.py
 # 라쉬케 전략: ORB (Opening Range Breakout)
-# core.py에서 정의된 공통 함수와 order_manager의 handle_entry/exit 사용
+# 롱 진입만 허용 (숏 진입 무시하여 실전 승률 강화)
 
 from datetime import datetime, timedelta
 from core import (
@@ -14,12 +14,14 @@ from core import (
 from order_manager import handle_entry, handle_exit
 from risk_config import ORB_TP_PERCENT, ORB_SL_PERCENT, ORB_TIMECUT_HOURS
 
+
 # 진입 가능 시간 (KST 기준 09:00~10:00, 21:00~22:00)
 def is_entry_time_kst():
     now = datetime.utcnow() + timedelta(hours=9)
     return (now.hour == 9 and now.minute < 60) or (now.hour == 21 and now.minute < 60)
 
-# Entry 조건 검사
+
+# Entry 조건 검사 (롱 진입만 허용)
 def check_entry(symbol: str) -> None:
     if not is_entry_time_kst() or not can_enter(symbol, "orb"):
         return
@@ -34,14 +36,12 @@ def check_entry(symbol: str) -> None:
     if price is None:
         return
 
+    # 롱 진입만 허용
     if price > open_high:
         direction = "long"
         side = "BUY"
-    elif price < open_low:
-        direction = "short"
-        side = "SELL"
     else:
-        return
+        return  # 숏은 무시
 
     qty = calculate_order_quantity(symbol)
     if qty <= 0:
@@ -58,6 +58,7 @@ def check_entry(symbol: str) -> None:
     }
     handle_entry(signal)
 
+
 # Exit 조건 검사
 def check_exit(symbol: str) -> None:
     positions = get_open_positions()
@@ -72,20 +73,18 @@ def check_exit(symbol: str) -> None:
     if price is None:
         return
 
-    tp = entry_price * (1 + ORB_TP_PERCENT / 100) if direction == "long" else entry_price * (1 - ORB_TP_PERCENT / 100)
-    sl = entry_price * (1 - ORB_SL_PERCENT / 100) if direction == "long" else entry_price * (1 + ORB_SL_PERCENT / 100)
+    tp = entry_price * (1 + ORB_TP_PERCENT / 100)
+    sl = entry_price * (1 - ORB_SL_PERCENT / 100)
 
     should_exit = False
     reason = ""
 
-    # TP/SL 체크
-    if (direction == "long" and price >= tp) or (direction == "short" and price <= tp):
+    if price >= tp:
         reason = "TP"
         should_exit = True
-    elif (direction == "long" and price <= sl) or (direction == "short" and price >= sl):
+    elif price <= sl:
         reason = "SL"
         should_exit = True
-    # TimeCut
     elif datetime.utcnow() - entry_time > timedelta(hours=ORB_TIMECUT_HOURS):
         reason = "TimeCut"
         should_exit = True

@@ -1,14 +1,22 @@
 # 파일명: position_monitor.py
 # 포지션 긴급 모니터링 모듈
-# 글로벌 포지션 상태 감시 및 긴급 청산 수행
 
 import threading
 import time
 import logging
 from collections import deque
 from decimal import Decimal
+
 from config import MAX_TRADE_DURATION, EMERGENCY_PERIOD, EMERGENCY_DROP_PERCENT
-from core import get_open_positions, get_position, send_telegram, place_market_exit, cancel_all_orders_for_symbol
+from binance_client import get_balance as get_position_balance
+from core import (
+    get_open_positions,
+    get_position,
+    send_telegram,
+    place_market_exit,
+    cancel_all_orders_for_symbol
+)
+
 
 class PositionMonitor(threading.Thread):
     """
@@ -27,10 +35,12 @@ class PositionMonitor(threading.Thread):
                 balance = Decimal(str(get_position_balance()))
                 now = time.time()
                 self.balance_history.append((now, balance))
-                # 구간 데이터 유지
+
+                # 오래된 기록 제거
                 while self.balance_history and (now - self.balance_history[0][0]) > EMERGENCY_PERIOD:
                     self.balance_history.popleft()
-                # 최대 손실 초과 시 긴급 청산
+
+                # 손실률 계산
                 if len(self.balance_history) >= 2:
                     old_ts, old_bal = self.balance_history[0]
                     drawdown = (old_bal - balance) / old_bal if old_bal > 0 else Decimal(0)
@@ -38,18 +48,18 @@ class PositionMonitor(threading.Thread):
                         send_telegram(f"🚨 긴급 손실 {drawdown*100:.2f}% 발생, 모든 포지션 청산")
                         self._liquidate_all()
                         return
-                # 각 포지션별 보유시간 초과 시 청산
+
+                # 각 포지션별 최대 보유시간 초과 감시
                 for sym, pos in list(get_open_positions().items()):
                     entry_time = pos.get("entry_time", 0)
                     qty = pos.get("qty", 0)
                     direction = pos.get("side")
                     if time.time() - entry_time >= MAX_TRADE_DURATION:
                         send_telegram(f"⏰ {sym} 보유시간 초과, 청산 진행")
-                        # 시장가 청산
                         place_market_exit(sym, "SELL" if direction == "long" else "BUY", qty)
-                        with_pos = get_open_positions()
-                        if sym in with_pos:
+                        if sym in get_open_positions():
                             cancel_all_orders_for_symbol(sym)
+
                 time.sleep(5)
             except Exception as e:
                 logging.error(f"[PositionMonitor 오류] {e}")
@@ -64,6 +74,3 @@ class PositionMonitor(threading.Thread):
 
     def stop(self) -> None:
         self._stop_event.set()
-
-# 보유 잔고 조회 헬퍼
-from binance_client import get_balance as get_position_balance

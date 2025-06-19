@@ -1,6 +1,5 @@
 # 파일명: strategy_pullback.py
-# 라쉬케 전략: Pullback
-# core.py에서 공통 함수 import, order_manager의 handle_entry/handle_exit 사용
+# 라쉬케 전략: Pullback (롱 진입 전용)
 
 from core import (
     get_klines,
@@ -12,13 +11,11 @@ from core import (
 )
 from order_manager import handle_entry, handle_exit
 from risk_config import PULLBACK_TP_PERCENT, PULLBACK_SL_PERCENT
+from datetime import datetime, timedelta
 
-# Pullback 전략 로직: EMA 21 기준 가격 반등 진입
 
 def calculate_ema(values, length):
-    """
-    단순 EMA 계산 함수 (pullback용)
-    """
+    """단순 EMA 계산 함수"""
     k = 2 / (length + 1)
     ema = values[0]
     for price in values[1:]:
@@ -28,7 +25,7 @@ def calculate_ema(values, length):
 
 def check_entry(symbol: str) -> None:
     """
-    pullback 전략 진입 체크
+    pullback 전략 진입 체크 (롱 진입만)
     """
     if not can_enter(symbol, "pullback"):
         return
@@ -42,14 +39,12 @@ def check_entry(symbol: str) -> None:
     price = closes[-1]
     prev_price = closes[-2]
 
+    # 롱 진입만 허용
     if prev_price < ema21 < price:
         direction = "long"
         side = "BUY"
-    elif prev_price > ema21 > price:
-        direction = "short"
-        side = "SELL"
     else:
-        return
+        return  # 숏 무시
 
     qty = calculate_order_quantity(symbol)
     if qty <= 0:
@@ -83,13 +78,12 @@ def check_exit(symbol: str) -> None:
     if price is None:
         return
 
-    tp = entry_price * (1 + PULLBACK_TP_PERCENT / 100) if direction == "long" else entry_price * (1 - PULLBACK_TP_PERCENT / 100)
-    sl = entry_price * (1 - PULLBACK_SL_PERCENT / 100) if direction == "long" else entry_price * (1 + PULLBACK_SL_PERCENT / 100)
+    tp = entry_price * (1 + PULLBACK_TP_PERCENT / 100)
+    sl = entry_price * (1 - PULLBACK_SL_PERCENT / 100)
 
-    # TP/SL 체크
-    if (direction == "long" and price >= tp) or (direction == "short" and price <= tp):
+    if price >= tp:
         reason = "TP"
-    elif (direction == "long" and price <= sl) or (direction == "short" and price >= sl):
+    elif price <= sl:
         reason = "SL"
     else:
         return

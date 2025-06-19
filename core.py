@@ -1,8 +1,6 @@
 # 파일명: core.py
 # 공통 함수 및 클래스를 정의하는 모듈입니다.
-# 이 파일의 함수명을 기준으로 다른 모듈이 import합니다.
 
-# Binance API 주문 및 데이터 조회
 from binance_client import (
     create_limit_order,
     place_market_order,
@@ -13,7 +11,6 @@ from binance_client import (
     create_stop_order,
 )
 
-# 유틸리티 함수
 from utils import (
     calculate_order_quantity,
     log_trade,
@@ -21,19 +18,17 @@ from utils import (
     get_filtered_top_symbols
 )
 
-# 포지션 관리 (core 기준 정의로 임시 대체 가능)
-from position_monitor import (
-    get_open_positions,
-    get_position,
+# 포지션 관련 함수는 utils 또는 여기에 직접 정의되어 있다고 가정
+from position_manager import (
     can_enter,
     add_position,
-    remove_position
+    remove_position,
+    get_open_positions,
+    get_position
 )
 
-# 알림
 from telegram_bot import send_telegram
 
-# 이 모듈에서 공개하는 API 목록
 __all__ = [
     "create_limit_order",
     "place_market_order",
