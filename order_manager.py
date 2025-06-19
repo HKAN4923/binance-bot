@@ -76,11 +76,12 @@ def handle_entry(signal: dict) -> None:
 
     # 4) TP/SL 설정
     if direction == 'long':
-        tp = entry_price * (1 + tp_percent / 100)
-        sl = entry_price * (1 - sl_percent / 100)
+        tp = float(Decimal(str(entry_price)) * (Decimal("1") + Decimal(str(tp_percent)) / Decimal("100")))
+
+        sl = float(Decimal(str(entry_price)) * (Decimal("1") - Decimal(str(sl_percent)) / Decimal("100")))
     else:
-        tp = entry_price * (1 - tp_percent / 100)
-        sl = entry_price * (1 + sl_percent / 100)
+        tp = float(Decimal(str(entry_price)) * (Decimal("1") - Decimal(str(tp_percent)) / Decimal("100")))
+        sl = float(Decimal(str(entry_price)) * (Decimal("1") + Decimal(str(sl_percent)) / Decimal("100")))
 
     tp_order = create_take_profit(symbol, 'SELL' if direction == 'long' else 'BUY', tp)
     sl_order = create_stop_order(symbol, 'SELL' if direction == 'long' else 'BUY', sl)
