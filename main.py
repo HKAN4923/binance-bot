@@ -21,6 +21,7 @@ from strategy_orb import check_entry as orb_entry, check_exit as orb_exit
 from strategy_nr7 import check_entry as nr7_entry, check_exit as nr7_exit
 from strategy_pullback import check_entry as pb_entry, check_exit as pb_exit
 from strategy_ema_cross import check_entry as ema_entry, check_exit as ema_exit
+from binance_client import client
 
 # 잔재 주문 정리
 def cleanup_orphan_orders():

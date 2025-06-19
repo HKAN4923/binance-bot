@@ -26,6 +26,6 @@ if missing:
     raise RuntimeError(f"{', '.join(missing)} 환경 변수가 설정되지 않았습니다.")
 
 # 포지션 모니터 관련 설정
-MAX_TRADE_DURATION = 60 * 60 * 3  # 최대 보유시간: 3시간 (초)
-EMERGENCY_PERIOD = 60 * 60 * 2   # 긴급 감시 구간: 2시간 (초)
-EMERGENCY_DROP_PERCENT = 0.1     # 10% 이상 손실 시 긴급 청산
+MAX_TRADE_DURATION = 60 * 60 * 2  # 최대 보유시간: 3시간 (초)
+EMERGENCY_PERIOD = 60 * 60 * 3   # 긴급 감시 구간: 2시간 (초)
+EMERGENCY_DROP_PERCENT = 0.15     # 10% 이상 손실 시 긴급 청산
