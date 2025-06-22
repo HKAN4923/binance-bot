@@ -8,8 +8,13 @@ import position_manager
 import trade_summary
 import utils
 from binance_client import client
-from risk_config import USE_MARKET_TP_SL, USE_MARKET_TP_SL_BACKUP, TP_SL_SLIPPAGE_RATE
-from risk_config import LEVERAGE
+from risk_config import (
+    USE_MARKET_TP_SL,
+    USE_MARKET_TP_SL_BACKUP,
+    TP_SL_SLIPPAGE_RATE,
+    LEVERAGE,
+)
+
 POSITIONS_TO_MONITOR: List[Dict[str, Any]] = []
 
 
@@ -23,6 +28,13 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> Dict[str, A
     """시장가 진입 주문 (실전)"""
     try:
         entry_price = get_current_price(symbol)
+
+        # ✅ 레버리지 자동 설정
+        try:
+            client.futures_change_leverage(symbol=symbol, leverage=LEVERAGE)
+        except Exception as e:
+            logging.warning(f"[레버리지 설정 실패] {symbol}: {e}")
+
         qty = utils.calculate_order_quantity(symbol, entry_price)
         side_binance = "BUY" if side.upper() == "LONG" else "SELL"
 
