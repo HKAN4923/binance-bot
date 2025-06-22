@@ -7,6 +7,7 @@ from typing import Iterable
 from zoneinfo import ZoneInfo
 
 from risk_config import CAPITAL_USAGE, LEVERAGE
+from binance_client import get_symbol_precision
 
 
 def calculate_order_quantity(symbol: str, price: float, balance: float = 1000) -> float:
@@ -52,11 +53,13 @@ def apply_slippage(price: float, side: str, rate: float) -> float:
     return price * (1 - rate)
 
 
-def round_price(symbol: str, price: float, tick_size: float = 0.01) -> float:
-    """tick size 기준 가격 반올림 (내림 처리)"""
+def round_price(symbol: str, price: float) -> float:
+    """tick size 기준 가격 반올림"""
+    tick_size = get_symbol_precision(symbol)["tick_size"]
     return math.floor(price / tick_size) * tick_size
 
 
-def round_quantity(symbol: str, qty: float, step_size: float = 0.001) -> float:
-    """step size 기준 수량 반올림 (내림 처리)"""
+def round_quantity(symbol: str, qty: float) -> float:
+    """step size 기준 수량 반올림"""
+    step_size = get_symbol_precision(symbol)["step_size"]
     return math.floor(qty / step_size) * step_size
