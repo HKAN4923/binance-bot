@@ -1,105 +1,94 @@
-# 파일명: strategy_nr7.py
+# strategy_nr7.py
 # 라쉬케 전략: NR7 (Natural Range 7)
-# core.py에서 공통 함수 import, order_manager의 handle_entry/exit 사용
+# 1h 봉 기준 narrow range 7 돌파 시 진입, TP/SL 및 시간 경과 조건으로 청산
 
 from datetime import datetime, timedelta
-from core import (
-    get_klines,
-    get_price,
-    calculate_order_quantity,
-    can_enter,
-    get_open_positions,
-    get_position
-)
+from decimal import Decimal
+from binance_client import get_ohlcv, get_price
+from position_manager import can_enter, get_positions
 from order_manager import handle_entry, handle_exit
-from risk_config import NR7_TP_PERCENT, NR7_SL_PERCENT, NR7_TIMECUT_HOURS
+from risk_config import NR7_TP_PERCENT, NR7_SL_PERCENT, NR7_TIMECUT_HOURS  # :contentReference[oaicite:0]{index=0}
 
-# NR7 전략 진입 체크 (1시간 봉 사용)
-# 최근 8개의 봉 중 가장 좁은 변동폭(High-Low)인 7개 봉을 찾아
-# 현재 가격이 해당 봉의 High를 상향 돌파하면 long,
-# Low를 하향 돌파하면 short로 진입
+def is_entry_time_kst() -> bool:
+    """KST 09:00~09:59, 21:00~21:59에만 진입 조건 체크"""
+    now = datetime.utcnow() + timedelta(hours=9)
+    return (now.hour == 9 and now.minute < 60) or (now.hour == 21 and now.minute < 60)
 
 def check_entry(symbol: str) -> None:
-    # 중복 진입 방지
-    if not can_enter(symbol, "nr7"):
+    """NR7 진입 조건 검사"""
+    if not is_entry_time_kst() or not can_enter():
         return
 
-    klines = get_klines(symbol, interval="1h", limit=8)
-    if not klines or len(klines) < 8:
+    # 동일 심볼 중복 진입 방지
+    for pos in get_positions():
+        if pos.get("symbol") == symbol:
+            return
+
+    # 최근 8개 1h 봉 조회 (마지막은 현재 진행 중)
+    df = get_ohlcv(symbol, interval="1h", limit=8)
+    if df is None or len(df) < 8:
         return
 
-    # 최근 7개 봉(마지막 제외)에 대해 변동폭 계산
-    bars = klines[:-1]
-    ranges = [(float(bar[2]) - float(bar[3]), idx) for idx, bar in enumerate(bars)]
-    # 가장 좁은 변동폭 봉 선택
-    min_range, min_idx = min(ranges, key=lambda x: x[0])
-    narrow_bar = bars[min_idx]
-    narrow_high = float(narrow_bar[2])
-    narrow_low = float(narrow_bar[3])
+    bars = df.iloc[:-1]  # 마지막 봉 제외
+    # 변동폭 계산 및 가장 좁은 봉 선택
+    ranges = (bars["high"] - bars["low"])
+    idx = ranges.idxmin()
+    narrow_high = Decimal(str(bars.loc[idx, "high"]))
+    narrow_low  = Decimal(str(bars.loc[idx, "low"]))
 
-    # 현재 가격
-    price = get_price(symbol)
-    if price is None:
-        return
-
+    price = Decimal(str(get_price(symbol)))
     # 돌파 시그널 판단
     if price > narrow_high:
-        direction = "long"
-        side = "BUY"
+        side, direction = "BUY", "long"
     elif price < narrow_low:
-        direction = "short"
-        side = "SELL"
+        side, direction = "SELL", "short"
     else:
         return
 
-    # 수량 계산
-    qty = calculate_order_quantity(symbol)
-    if qty <= 0:
+    # 수량 계산 (utils.calculate_order_quantity를 이후 구현)
+    # 예시 placeholder: qty = Decimal("0.0")
+    from utils import calculate_order_quantity
+    raw_qty = calculate_order_quantity(symbol)
+    if raw_qty <= 0:
         return
+    qty = Decimal(str(raw_qty))
 
-    # 신호 생성 및 진입 처리
-    signal = {
-        "symbol": symbol,
-        "side": side,
-        "direction": direction,
-        "strategy": "nr7",
-        "qty": qty,
-        "tp_percent": NR7_TP_PERCENT,
-        "sl_percent": NR7_SL_PERCENT
-    }
-    handle_entry(signal)
+    # TP/SL 가격 계산
+    tp_price = (price * (Decimal("1") + NR7_TP_PERCENT / Decimal("100"))).quantize(Decimal("1e-8"))
+    sl_price = (price * (Decimal("1") - NR7_SL_PERCENT / Decimal("100"))).quantize(Decimal("1e-8"))
 
-# NR7 청산 체크
-# TP/SL 도달 또는 지정된 시간 경과 시 청산
+    # 진입 처리
+    handle_entry(
+        symbol=symbol,
+        side=side,
+        quantity=qty,
+        entry_price=price,
+        sl_price=sl_price,
+        tp_price=tp_price,
+        strategy_name="NR7"
+    )
 
 def check_exit(symbol: str) -> None:
-    positions = get_open_positions()
-    if symbol not in positions or positions[symbol]["strategy"] != "nr7":
-        return
+    """NR7 청산 조건 검사"""
+    now = datetime.utcnow()
+    for pos in get_positions():
+        if pos.get("symbol") != symbol or pos.get("strategy") != "NR7":
+            continue
 
-    pos = get_position(symbol)
-    entry_time = pos.get("entry_time")
-    entry_price = pos.get("entry_price")
-    direction = pos.get("side")
-    qty = pos.get("qty")
-    price = get_price(symbol)
-    if price is None:
-        return
+        entry_time = datetime.strptime(pos["entry_time"], "%Y-%m-%d %H:%M:%S")
+        entry_price = Decimal(pos["entry_price"])
+        tp_price    = Decimal(pos["tp_price"])
+        sl_price    = Decimal(pos["sl_price"])
 
-    # TP/SL 가격
-    tp = entry_price * (1 + NR7_TP_PERCENT / 100) if direction == "long" else entry_price * (1 - NR7_TP_PERCENT / 100)
-    sl = entry_price * (1 - NR7_SL_PERCENT / 100) if direction == "long" else entry_price * (1 + NR7_SL_PERCENT / 100)
+        price = Decimal(str(get_price(symbol)))
+        reason = None
 
-    # 청산 사유 결정
-    reason = None
-    if (direction == "long" and price >= tp) or (direction == "short" and price <= tp):
-        reason = "TP"
-    elif (direction == "long" and price <= sl) or (direction == "short" and price >= sl):
-        reason = "SL"
-    else:
-        # TimeCut 경과 확인
-        if entry_time and datetime.utcnow() - entry_time > timedelta(hours=NR7_TIMECUT_HOURS):
+        if price >= tp_price:
+            reason = "TP"
+        elif price <= sl_price:
+            reason = "SL"
+        elif now - entry_time >= timedelta(hours=NR7_TIMECUT_HOURS):
             reason = "TimeCut"
 
-    if reason:
-        handle_exit(symbol, "nr7", direction, qty, entry_price, reason)
+        if reason:
+            handle_exit(position=pos, reason=reason)

@@ -1,91 +1,93 @@
-# 파일명: strategy_pullback.py
-# 라쉬케 전략: Pullback (롱 진입 전용)
-
-from core import (
-    get_klines,
-    get_price,
-    calculate_order_quantity,
-    can_enter,
-    get_open_positions,
-    get_position
-)
-from order_manager import handle_entry, handle_exit
-from risk_config import PULLBACK_TP_PERCENT, PULLBACK_SL_PERCENT
+# strategy_pullback.py
+"""
+Pullback 전략 (롱 진입 전용)
+– EMA21 크로스 기반 진입
+– TP/SL 및 타임컷 조건으로 청산
+"""
 from datetime import datetime, timedelta
+from decimal import Decimal
+import pandas as pd
 
-
-def calculate_ema(values, length):
-    """단순 EMA 계산 함수"""
-    k = 2 / (length + 1)
-    ema = values[0]
-    for price in values[1:]:
-        ema = price * k + ema * (1 - k)
-    return ema
-
+from binance_client import get_ohlcv, get_price
+from position_manager import can_enter, get_positions
+from order_manager import handle_entry, handle_exit
+from risk_config import (
+    PULLBACK_TP_PERCENT,
+    PULLBACK_SL_PERCENT,
+    PULLBACK_TIMECUT_HOURS,
+)
+from utils import calculate_order_quantity
 
 def check_entry(symbol: str) -> None:
     """
-    pullback 전략 진입 체크 (롱 진입만)
+    Pullback 전략 진입 체크:
+      1) 최대 포지션 미만
+      2) 동일 심볼 중복 진입 방지
+      3) 5m 봉 EMA21 크로스(이전 종가 < EMA21, 현재 종가 > EMA21) 시 롱 진입
     """
-    if not can_enter(symbol, "pullback"):
+    if not can_enter():
+        return
+    # 중복 진입 방지
+    for pos in get_positions():
+        if pos.get("symbol") == symbol and pos.get("strategy") == "Pullback":
+            return
+
+    df = get_ohlcv(symbol, interval="5m", limit=30)
+    if df is None or len(df) < 22:
         return
 
-    candles = get_klines(symbol, interval="5m", limit=30)
-    if not candles or len(candles) < 30:
+    # EMA21 계산
+    df["ema21"] = df["close"].ewm(span=21, adjust=False).mean()
+    prev, curr = df.iloc[-2], df.iloc[-1]
+    # EMA21 크로스 확인
+    if not (prev["close"] < prev["ema21"] and curr["close"] > curr["ema21"]):
         return
 
-    closes = [float(c[4]) for c in candles]
-    ema21 = calculate_ema(closes[-22:], 21)
-    price = closes[-1]
-    prev_price = closes[-2]
-
-    # 롱 진입만 허용
-    if prev_price < ema21 < price:
-        direction = "long"
-        side = "BUY"
-    else:
-        return  # 숏 무시
-
-    qty = calculate_order_quantity(symbol)
-    if qty <= 0:
+    # 수량 계산
+    raw_qty = calculate_order_quantity(symbol)
+    if raw_qty <= 0:
         return
+    qty = Decimal(str(raw_qty))
 
-    signal = {
-        "symbol": symbol,
-        "side": side,
-        "direction": direction,
-        "strategy": "pullback",
-        "qty": qty,
-        "tp_percent": PULLBACK_TP_PERCENT,
-        "sl_percent": PULLBACK_SL_PERCENT
-    }
-    handle_entry(signal)
+    # 진입가·TP·SL 가격 정의
+    price    = Decimal(str(get_price(symbol)))
+    tp_price = (price * (Decimal("1") + PULLBACK_TP_PERCENT / Decimal("100"))).quantize(Decimal("1e-8"))
+    sl_price = (price * (Decimal("1") - PULLBACK_SL_PERCENT / Decimal("100"))).quantize(Decimal("1e-8"))
 
+    # 진입 처리
+    handle_entry(
+        symbol=symbol,
+        side="BUY",
+        quantity=qty,
+        entry_price=price,
+        sl_price=sl_price,
+        tp_price=tp_price,
+        strategy_name="Pullback",
+    )
 
 def check_exit(symbol: str) -> None:
     """
-    pullback 전략 청산 체크
+    Pullback 전략 청산 체크:
+      – TP/SL 도달
+      – 진입 후 타임컷 경과
     """
-    positions = get_open_positions()
-    if symbol not in positions or positions[symbol]["strategy"] != "pullback":
-        return
+    now = datetime.utcnow()
+    for pos in get_positions():
+        if pos.get("symbol") != symbol or pos.get("strategy") != "Pullback":
+            continue
 
-    pos = get_position(symbol)
-    entry_price = pos["entry_price"]
-    direction = pos["side"]
-    qty = pos.get("qty", 0)
-    price = get_price(symbol)
-    if price is None:
-        return
+        entry_time  = datetime.strptime(pos["entry_time"], "%Y-%m-%d %H:%M:%S")
+        tp_price    = Decimal(pos["tp_price"])
+        sl_price    = Decimal(pos["sl_price"])
+        price       = Decimal(str(get_price(symbol)))
+        reason      = None
 
-    tp = entry_price * (1 + PULLBACK_TP_PERCENT / 100)
-    sl = entry_price * (1 - PULLBACK_SL_PERCENT / 100)
+        if price >= tp_price:
+            reason = "TP"
+        elif price <= sl_price:
+            reason = "SL"
+        elif now - entry_time >= timedelta(hours=PULLBACK_TIMECUT_HOURS):
+            reason = "TimeCut"
 
-    if price >= tp:
-        reason = "TP"
-    elif price <= sl:
-        reason = "SL"
-    else:
-        return
-
-    handle_exit(symbol, "pullback", direction, qty, entry_price, reason)
+        if reason:
+            handle_exit(position=pos, reason=reason)

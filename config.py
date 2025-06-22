@@ -1,31 +1,33 @@
-# 파일명: config.py
-# 봇 운영 환경 및 스케줄 설정 모듈
-
+# config.py
 import os
 from dotenv import load_dotenv
+from binance_client import get_top_volume_symbols
 
+# .env 로드
 load_dotenv()
 
-# 최대 동시 보유 포지션 수
-MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))
-# 시장 분석 주기 (초 단위)
-ANALYSIS_INTERVAL_SEC = int(os.getenv("ANALYSIS_INTERVAL_SEC", "10"))
+# Binance API / Telegram 설정 (필수)
+BINANCE_API_KEY: str = os.getenv("BINANCE_API_KEY", "")
+BINANCE_API_SECRET: str = os.getenv("BINANCE_API_SECRET", "")
+TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# 텔레그램으로 거래 요약을 보낼 시각 리스트 (KST 기준 시, 분)
-SUMMARY_TIMES = [
-    (6, 30),
-    (12, 0),
-    (18, 0),
-    (21, 30),
-]
+if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+    raise RuntimeError("BINANCE API 키 또는 시크릿이 설정되지 않았습니다.")
+if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    raise RuntimeError("텔레그램 토큰 또는 챗 ID가 설정되지 않았습니다.")
 
-# 환경 변수 검증: 필수 설정 누락 시 오류
-required = ["BINANCE_API_KEY", "BINANCE_API_SECRET", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID"]
-missing = [var for var in required if not os.getenv(var)]
-if missing:
-    raise RuntimeError(f"{', '.join(missing)} 환경 변수가 설정되지 않았습니다.")
+# 봇 전반 동작 파라미터
+MAX_POSITIONS: int = int(os.getenv("MAX_POSITIONS", 5))
+ANALYSIS_INTERVAL_SEC: int = int(os.getenv("ANALYSIS_INTERVAL_SEC", 60))
+POSITION_CHECK_INTERVAL_SEC: int = int(os.getenv("POSITION_CHECK_INTERVAL_SEC", 30))
+SUMMARY_INTERVAL_SEC: int = 2 * 60 * 60  # 2시간마다 요약 전송
 
-# 포지션 모니터 관련 설정
-MAX_TRADE_DURATION = 60 * 60 * 2  # 최대 보유시간: 3시간 (초)
-EMERGENCY_PERIOD = 60 * 60 * 3   # 긴급 감시 구간: 2시간 (초)
-EMERGENCY_DROP_PERCENT = 0.15     # 10% 이상 손실 시 긴급 청산
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+# 심볼 리스트: 24h 거래량 상위 N개 (기본 50개)
+SYMBOL_LIMIT: int = int(os.getenv("SYMBOL_LIMIT", 50))
+SYMBOLS: list = get_top_volume_symbols(limit=SYMBOL_LIMIT)
+
+# 기타 상수
+DATE_FORMAT: str = "%Y-%m-%d %H:%M:%S"

@@ -1,47 +1,60 @@
-# 파일명: risk_config.py
-# 리스크 및 전략별 파라미터 설정 모듈
+# risk_config.py
 
 import os
-from decimal import Decimal
 from dotenv import load_dotenv
 from decimal import Decimal
 
-
 load_dotenv()
 
-# ─────────── 포지션 사이즈 및 레버리지 ───────────
-# 전체 자산 중 포지션당 사용할 비율 (예: 0.2 → 20%)
-POSITION_RATIO = Decimal(os.getenv("POSITION_RATIO", "0.2"))
-# 사용 레버리지 (예: 10배)
-LEVERAGE = int(os.getenv("LEVERAGE", "10"))
-# 최소 거래 가치(USDT 단위)
-MIN_NOTIONAL = Decimal(os.getenv("MIN_NOTIONAL", "10"))
+# -----------------------------
+# 1) 레버리지 설정 (기본 1배, 필요 시 .env로 조정)
+# -----------------------------
+ORB_LEVERAGE        = int(os.getenv("ORB_LEVERAGE", "1"))
+NR7_LEVERAGE        = int(os.getenv("NR7_LEVERAGE", "1"))
+EMA_LEVERAGE        = int(os.getenv("EMA_LEVERAGE", "1"))
+PULLBACK_LEVERAGE   = int(os.getenv("PULLBACK_LEVERAGE", "1"))
 
-# ───────────── ORB 전략 파라미터 ─────────────
-# 익절 비율(%)
-ORB_TP_PERCENT = Decimal(os.getenv("ORB_TP_PERCENT", "1.75"))
-# 손절 비율(%)
-ORB_SL_PERCENT = Decimal(os.getenv("ORB_SL_PERCENT", "0.8"))
-# 타임컷 (시간 단위)
-ORB_TIMECUT_HOURS = int(os.getenv("ORB_TIMECUT_HOURS", "3"))
+def get_leverage(strategy_name: str) -> int:
+    return {
+        "ORB":      ORB_LEVERAGE,
+        "NR7":      NR7_LEVERAGE,
+        "EMA":      EMA_LEVERAGE,
+        "Pullback": PULLBACK_LEVERAGE,
+    }.get(strategy_name, 1)
 
-# ───────────── NR7 전략 파라미터 ─────────────
-NR7_TP_PERCENT = Decimal(os.getenv("NR7_TP_PERCENT", "2"))
-NR7_SL_PERCENT = Decimal(os.getenv("NR7_SL_PERCENT", "1"))
-NR7_TIMECUT_HOURS = int(os.getenv("NR7_TIMECUT_HOURS", "3"))
 
-# ───────── Pullback 전략 파라미터 ─────────
-PULLBACK_TP_PERCENT = Decimal(os.getenv("PULLBACK_TP_PERCENT", "1.5"))
-PULLBACK_SL_PERCENT = Decimal(os.getenv("PULLBACK_SL_PERCENT", "1"))
+# -----------------------------
+# 2) ORB 전략 리스크/시간 설정
+# -----------------------------
+ORB_SL_PERCENT       = Decimal(os.getenv("ORB_SL_PERCENT", "1.2"))   # 손절 1.2%
+ORB_TP_PERCENT       = Decimal(os.getenv("ORB_TP_PERCENT", "2.4"))   # 익절 2.4%
+ORB_TIMECUT_HOURS    = int(os.getenv("ORB_TIMECUT_HOURS", "2"))      # 타임컷 2시간
 
-# ──────── EMA Cross 전략 파라미터 ─────────
-EMA_TP_PERCENT = Decimal(os.getenv("EMA_TP_PERCENT", "1.5"))
-EMA_SL_PERCENT = Decimal(os.getenv("EMA_SL_PERCENT", "1"))
-EMA_SHORT_LEN_CROSS = int(os.getenv("EMA_SHORT_LEN_CROSS", "9"))
-EMA_LONG_LEN_CROSS = int(os.getenv("EMA_LONG_LEN_CROSS", "21"))
-EMA_TIMECUT_HOURS = int(os.getenv("EMA_TIMECUT_HOURS", "3"))
 
-# ─────── 환경 변수 필수 확인 ─────────
-for var in ["BINANCE_API_KEY", "BINANCE_API_SECRET", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID"]:
-    if not os.getenv(var):
-        raise RuntimeError(f"환경 변수 {var}가 설정되지 않았습니다.")
+# -----------------------------
+# 3) NR7 전략 리스크/시간 설정
+# -----------------------------
+NR7_SL_PERCENT       = Decimal(os.getenv("NR7_SL_PERCENT", "0.8"))   # 손절 0.8%
+NR7_TP_PERCENT       = Decimal(os.getenv("NR7_TP_PERCENT", "1.6"))   # 익절 1.6%
+NR7_TIMECUT_HOURS    = int(os.getenv("NR7_TIMECUT_HOURS", "2"))      # 타임컷 2시간
+
+
+# -----------------------------
+# 4) EMA 크로스 + RSI 전략 파라미터
+# -----------------------------
+EMA_FAST_PERIOD      = int(os.getenv("EMA_FAST_PERIOD", "8"))        # 빠른 EMA 기간
+EMA_SLOW_PERIOD      = int(os.getenv("EMA_SLOW_PERIOD", "21"))       # 느린 EMA 기간
+RSI_PERIOD           = int(os.getenv("RSI_PERIOD", "14"))           # RSI 계산 기간
+EMA_RSI_LONG_MIN     = Decimal(os.getenv("EMA_RSI_LONG_MIN", "55"))  # 롱 진입 시 최소 RSI
+EMA_RSI_SHORT_MAX    = Decimal(os.getenv("EMA_RSI_SHORT_MAX", "45")) # 숏 진입 시 최대 RSI
+EMA_SL_PERCENT       = Decimal(os.getenv("EMA_SL_PERCENT", "1.5"))   # 손절 1.5%
+EMA_TP_PERCENT       = Decimal(os.getenv("EMA_TP_PERCENT", "3.0"))   # 익절 3.0%
+EMA_TIMECUT_HOURS    = int(os.getenv("EMA_TIMECUT_HOURS", "2"))      # 타임컷 2시간
+
+
+# -----------------------------
+# 5) Pullback 전략 리스크/시간 설정
+# -----------------------------
+PULLBACK_SL_PERCENT      = Decimal(os.getenv("PULLBACK_SL_PERCENT", "1.0"))  # 손절 1.0%
+PULLBACK_TP_PERCENT      = Decimal(os.getenv("PULLBACK_TP_PERCENT", "2.0"))  # 익절 2.0%
+PULLBACK_TIMECUT_HOURS   = int(os.getenv("PULLBACK_TIMECUT_HOURS", "2"))     # 타임컷 2시간

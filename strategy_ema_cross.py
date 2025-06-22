@@ -1,94 +1,103 @@
-# 파일명: strategy_ema_cross.py
-# 라쉬케 전략: EMA 크로스 (롱 진입만 허용)
+# strategy_ema_cross.py
+"""
+EMA 9/21 크로스 + RSI 필터 전략
+- EMA_FAST_PERIOD, EMA_SLOW_PERIOD 기준 크로스 신호
+- RSI 필터: 롱 진입 시 RSI ≥ EMA_RSI_LONG_MIN, 숏 진입 시 RSI ≤ EMA_RSI_SHORT_MAX
+- TP/SL % 설정: EMA_TP_PERCENT, EMA_SL_PERCENT
+- 시간 컷: EMA_TIMECUT_HOURS
+"""
 
-from core import (
-    get_klines,
-    get_price,
-    calculate_order_quantity,
-    can_enter,
-    get_open_positions,
-    get_position
-)
-from order_manager import handle_entry, handle_exit
-from risk_config import EMA_TP_PERCENT, EMA_SL_PERCENT, EMA_SHORT_LEN_CROSS, EMA_LONG_LEN_CROSS, EMA_TIMECUT_HOURS
 from datetime import datetime, timedelta
+from decimal import Decimal
+import pandas as pd
 
+from binance_client import get_ohlcv, get_price
+from position_manager import can_enter, get_positions
+from order_manager import handle_entry, handle_exit
+from risk_config import (
+    EMA_FAST_PERIOD,
+    EMA_SLOW_PERIOD,
+    RSI_PERIOD,
+    EMA_RSI_LONG_MIN,
+    EMA_RSI_SHORT_MAX,
+    EMA_TP_PERCENT,
+    EMA_SL_PERCENT,
+    EMA_TIMECUT_HOURS,
+)
 
-def calculate_ema(prices: list, length: int) -> float:
-    """
-    단순 EMA 계산 (가격 리스트, 길이)
-    """
-    k = 2 / (length + 1)
-    ema = prices[0]
-    for price in prices[1:]:
-        ema = price * k + ema * (1 - k)
-    return ema
-
+from utils import calculate_rsi, calculate_order_quantity
 
 def check_entry(symbol: str) -> None:
-    if not can_enter(symbol, "ema"):
+    # 최대 포지션 수, 중복 진입 방지
+    if not can_enter():
+        return
+    for pos in get_positions():
+        if pos.get("symbol") == symbol and pos.get("strategy") == "EMA":
+            return
+
+    # 필요 데이터 수: EMA_SLOW_PERIOD, RSI_PERIOD 중 큰 값 + 2
+    limit = max(EMA_SLOW_PERIOD, RSI_PERIOD) + 2
+    df = get_ohlcv(symbol, interval="1h", limit=limit)
+    if df is None or len(df) < limit:
         return
 
-    candles = get_klines(symbol, interval="5m", limit=50)
-    if not candles or len(candles) < max(EMA_SHORT_LEN_CROSS, EMA_LONG_LEN_CROSS) + 1:
-        return
+    # 지수이동평균 계산
+    df["ema_fast"] = df["close"].ewm(span=EMA_FAST_PERIOD, adjust=False).mean()
+    df["ema_slow"] = df["close"].ewm(span=EMA_SLOW_PERIOD, adjust=False).mean()
+    # RSI 계산
+    df["rsi"] = calculate_rsi(df["close"], RSI_PERIOD)
 
-    closes = [float(c[4]) for c in candles]
-    ema_short = calculate_ema(closes[-(EMA_SHORT_LEN_CROSS+1):], EMA_SHORT_LEN_CROSS)
-    ema_long = calculate_ema(closes[-(EMA_LONG_LEN_CROSS+1):], EMA_LONG_LEN_CROSS)
+    prev, curr = df.iloc[-2], df.iloc[-1]
+    price = Decimal(str(get_price(symbol)))
 
-    # 롱 진입만 허용 (골든크로스)
-    if ema_short > ema_long:
-        direction = "long"
+    side = None
+    # 골든크로스 + RSI 필터
+    if prev["ema_fast"] <= prev["ema_slow"] and curr["ema_fast"] > curr["ema_slow"] and curr["rsi"] >= EMA_RSI_LONG_MIN:
         side = "BUY"
+    # 데드크로스 + RSI 필터
+    elif prev["ema_fast"] >= prev["ema_slow"] and curr["ema_fast"] < curr["ema_slow"] and curr["rsi"] <= EMA_RSI_SHORT_MAX:
+        side = "SELL"
     else:
-        return  # 숏은 무시
-
-    qty = calculate_order_quantity(symbol)
-    if qty <= 0:
         return
 
-    signal = {
-        "symbol": symbol,
-        "side": side,
-        "direction": direction,
-        "strategy": "ema",
-        "qty": qty,
-        "tp_percent": EMA_TP_PERCENT,
-        "sl_percent": EMA_SL_PERCENT
-    }
-    handle_entry(signal)
+    # TP/SL 가격 계산
+    tp_price = (price * (Decimal("1") + EMA_TP_PERCENT / Decimal("100"))).quantize(Decimal("1e-8"))
+    sl_price = (price * (Decimal("1") - EMA_SL_PERCENT / Decimal("100"))).quantize(Decimal("1e-8"))
+
+    raw_qty = calculate_order_quantity(symbol)
+    if raw_qty <= 0:
+        return
+    qty = Decimal(str(raw_qty))
+
+    handle_entry(
+        symbol=symbol,
+        side=side,
+        quantity=qty,
+        entry_price=price,
+        sl_price=sl_price,
+        tp_price=tp_price,
+        strategy_name="EMA",
+    )
 
 
 def check_exit(symbol: str) -> None:
-    positions = get_open_positions()
-    if symbol not in positions or positions[symbol]["strategy"] != "ema":
-        return
+    now = datetime.utcnow()
+    for pos in get_positions():
+        if pos.get("symbol") != symbol or pos.get("strategy") != "EMA":
+            continue
 
-    pos = get_position(symbol)
-    entry_time = pos["entry_time"]
-    entry_price = pos["entry_price"]
-    direction = pos["side"]
-    qty = pos.get("qty", 0)
-    price = get_price(symbol)
-    if price is None:
-        return
+        entry_time = datetime.strptime(pos["entry_time"], "%Y-%m-%d %H:%M:%S")
+        tp_price    = Decimal(pos["tp_price"])
+        sl_price    = Decimal(pos["sl_price"])
+        price       = Decimal(str(get_price(symbol)))
+        reason = None
 
-    tp = entry_price * (1 + EMA_TP_PERCENT / 100)
-    sl = entry_price * (1 - EMA_SL_PERCENT / 100)
+        if price >= tp_price:
+            reason = "TP"
+        elif price <= sl_price:
+            reason = "SL"
+        elif now - entry_time >= timedelta(hours=EMA_TIMECUT_HOURS):
+            reason = "TimeCut"
 
-    should_exit = False
-    reason = ""
-
-    if price >= tp:
-        reason = "TP"
-        should_exit = True
-    elif price <= sl:
-        reason = "SL"
-        should_exit = True
-    elif datetime.utcnow() - entry_time > timedelta(hours=EMA_TIMECUT_HOURS):
-        reason = "TimeCut"
-        should_exit = True
-
-    if should_exit:
-        handle_exit(symbol, "ema", direction, qty, entry_price, reason)
+        if reason:
+            handle_exit(position=pos, reason=reason)

@@ -1,145 +1,149 @@
-# 파일명: order_manager.py
-# 중앙 주문 처리 모듈
-# core.py에 정의된 함수·클래스를 활용하여
-# 지정가 진입 → 체결 확인 → TP/SL 설정 → 포지션 등록 과정을 수행합니다.
+# order_manager.py
 
+import logging
 import time
-from binance_client import client, cancel_all_orders_for_symbol
-from core import (
-    create_limit_order,
-    place_market_order,
-    place_market_exit,
-    get_price,
-    create_take_profit,
-    create_stop_order,
-    calculate_order_quantity,
-    log_trade,
-    summarize_trades,
-    can_enter,
-    add_position,
-    remove_position,
-    send_telegram
-)
+from decimal import Decimal, ROUND_DOWN, getcontext
 
-from decimal import Decimal
+from binance_client import client, change_leverage
+from telegram_bot import send_message
+from position_manager import add_position, remove_position
+from risk_config import get_leverage
 
-def handle_entry(signal: dict) -> None:
+# 소수점 처리 정밀도 설정
+getcontext().prec = 18
+ORDER_TIMEOUT_SEC = 30  # 주문 체결 대기 최대 시간 (초)
+
+def place_limit_order(symbol: str, side: str, quantity: Decimal, price: Decimal) -> dict:
     """
-    signal 구조:
-      {
-        'symbol': str,
-        'side': 'BUY' or 'SELL',
-        'direction': 'long' or 'short',
-        'strategy': str,
-        'qty': float,
-        'tp_percent': float,
-        'sl_percent': float
-      }
+    지정가 주문을 걸고, 최대 ORDER_TIMEOUT_SEC 동안 체결을 확인합니다.
+    체결되지 않으면 주문을 취소하고 빈 dict를 반환합니다.
     """
-    symbol = signal['symbol']
-    side = signal['side']
-    direction = signal['direction']
-    strategy = signal['strategy']
-    qty = signal['qty']
-    tp_percent = signal['tp_percent']
-    sl_percent = signal['sl_percent']
-
-    # 중복 진입 방지
-    if not can_enter(symbol, strategy):
-        return
-
-    # 1) 지정가 진입 주문
-    price = get_price(symbol)
-    entry_order = create_limit_order(symbol, side, qty, price)
-    if not entry_order or entry_order.get('orderId') is None:
-        send_telegram(f"⚠️ [{strategy.upper()}] {symbol} 지정가 주문 실패")
-        return
-
-    order_id = entry_order['orderId']
-    # 2) 체결 대기
-    time.sleep(1)
-
-    # 3) 체결 확인
     try:
-        order_info = client.futures_get_order(symbol=symbol, orderId=order_id)
+        order = client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type='LIMIT',
+            timeInForce='GTC',
+            quantity=str(quantity.quantize(Decimal('1e-8'), rounding=ROUND_DOWN)),
+            price=str(price)
+        )
+        order_id = order['orderId']
     except Exception as e:
-        send_telegram(f"⚠️ [{strategy.upper()}] {symbol} 주문 확인 오류: {e}")
-        cancel_all_orders_for_symbol(symbol)
-        return
+        logging.error(f"[주문 오류] {symbol} {side} {quantity}@{price}: {e}")
+        return {}
 
-    if order_info.get('status') != 'FILLED':
-        send_telegram(f"⚠️ [{strategy.upper()}] {symbol} 미체결, 주문 취소")
-        cancel_all_orders_for_symbol(symbol)
-        return
+    start = time.time()
+    while time.time() - start < ORDER_TIMEOUT_SEC:
+        try:
+            status = client.futures_get_order(symbol=symbol, orderId=order_id)['status']
+            if status == 'FILLED':
+                return order
+        except Exception as e:
+            logging.error(f"[체결 확인 오류] {symbol} 주문 {order_id}: {e}")
+        time.sleep(0.5)
 
-    # 체결가 추출
-    entry_price = float(order_info.get('avgFillPrice', order_info.get('price', price)))
+    # 체결 실패 시 주문 취소
+    try:
+        client.futures_cancel_order(symbol=symbol, orderId=order_id)
+    except Exception as e:
+        logging.error(f"[주문 취소 오류] {symbol} 주문 {order_id}: {e}")
+    return {}
 
-    # 4) TP/SL 설정
-    if direction == 'long':
-        tp = float(Decimal(str(entry_price)) * (Decimal("1") + Decimal(str(tp_percent)) / Decimal("100")))
-
-        sl = float(Decimal(str(entry_price)) * (Decimal("1") - Decimal(str(sl_percent)) / Decimal("100")))
-    else:
-        tp = float(Decimal(str(entry_price)) * (Decimal("1") - Decimal(str(tp_percent)) / Decimal("100")))
-        sl = float(Decimal(str(entry_price)) * (Decimal("1") + Decimal(str(sl_percent)) / Decimal("100")))
-
-    tp_order = create_take_profit(symbol, 'SELL' if direction == 'long' else 'BUY', tp)
-    sl_order = create_stop_order(symbol, 'SELL' if direction == 'long' else 'BUY', sl)
-
-    if not tp_order or not sl_order:
-        send_telegram(f"⚠️ [{strategy.upper()}] {symbol} TP/SL 설정 실패, 진입 무효 처리")
-        cancel_all_orders_for_symbol(symbol)
-        return
-
-    # 5) 포지션 등록 및 로그
-    add_position(symbol, direction, entry_price, qty, strategy)
-    log_trade({
-        'symbol': symbol,
-        'strategy': strategy,
-        'side': direction,
-        'entry_price': entry_price,
-        'tp': tp,
-        'sl': sl,
-        'position_size': qty,
-        'status': 'entry'
-    })
-    send_telegram(
-        f"✅ [{strategy.upper()}] {symbol} 진입 성공 @ {entry_price:.4f}\n"
-        f"TP: {tp:.4f} / SL: {sl:.4f} | Qty: {qty}"
-    )
-
-
-def handle_exit(symbol: str, strategy: str, direction: str, qty: float, entry_price: float, reason: str) -> None:
+def set_oco_orders(symbol: str, side: str,
+                   tp_price: Decimal, sl_price: Decimal):
     """
-    포지션 청산 처리
+    TP/SL Market 주문(Stop Market + Take Profit Market) 설정.
+    한쪽 체결 시 반대쪽은 자동 취소됩니다.
     """
-    # 현재가 조회
-    price = get_price(symbol)
-    if price is None:
+    exit_side = 'SELL' if side == 'BUY' else 'BUY'
+    try:
+        # 손절 Stop Market
+        client.futures_create_order(
+            symbol=symbol,
+            side=exit_side,
+            type='STOP_MARKET',
+            stopPrice=str(sl_price),
+            closePosition=True
+        )
+        # 익절 Take Profit Market
+        client.futures_create_order(
+            symbol=symbol,
+            side=exit_side,
+            type='TAKE_PROFIT_MARKET',
+            stopPrice=str(tp_price),
+            closePosition=True
+        )
+    except Exception as e:
+        logging.error(f"[OCO 설정 오류] {symbol} TP:{tp_price} SL:{sl_price}: {e}")
+
+def handle_entry(symbol: str,
+                 side: str,
+                 quantity: Decimal,
+                 entry_price: Decimal,
+                 sl_price: Decimal,
+                 tp_price: Decimal,
+                 strategy_name: str):
+    """
+    전략 진입 처리:
+      1) 레버리지 설정
+      2) 지정가 주문 → 체결 확인
+      3) 포지션 메모리 등록
+      4) TP/SL 설정
+      5) 텔레그램 알림
+    """
+    # 1) 레버리지 조정
+    lev = get_leverage(strategy_name)
+    change_leverage(symbol, lev)
+
+    # 2) 지정가 진입 주문
+    order = place_limit_order(symbol, side, quantity, entry_price)
+    if not order:
+        send_message(f"⚠️ {strategy_name} {symbol} 진입 실패")
         return
 
-    # 시장가 청산
-    place_market_exit(symbol, 'SELL' if direction == 'long' else 'BUY', qty)
-    remove_position(symbol)
-
-    # 손익 계산
-    if direction == 'long':
-        pl = (price - entry_price) * qty
-    else:
-        pl = (entry_price - price) * qty
-
-    # 로그 및 알림
-    log_trade({
+    # 3) 메모리 등록
+    add_position({
         'symbol': symbol,
-        'strategy': strategy,
-        'side': direction,
-        'exit_price': price,
-        'entry_price': entry_price,
-        'reason': reason,
-        'position_size': qty,
-        'status': 'exit'
+        'side': side,
+        'quantity': str(quantity),
+        'entry_price': str(entry_price),
+        'sl_price': str(sl_price),
+        'tp_price': str(tp_price),
+        'strategy': strategy_name,
+        'entry_time': time.strftime("%Y-%m-%d %H:%M:%S")
     })
-    emoji = '🟢' if pl >= 0 else '🔴'
-    send_telegram(f"{emoji} [{strategy.upper()}] {symbol} 청산 @ {price:.4f} | 손익: {pl:.2f} USDT")
-    send_telegram(summarize_trades())
+
+    # 4) TP/SL OCO 주문
+    set_oco_orders(symbol, side, tp_price, sl_price)
+
+    # 5) 진입 알림
+    send_message(f"✅ {strategy_name} {symbol} 진입: {side} {quantity}@{entry_price}")
+
+def handle_exit(position: dict, reason: str):
+    """
+    전략 청산 처리:
+      1) 시장가 청산 주문
+      2) 포지션 메모리 제거
+      3) 텔레그램 알림
+    """
+    symbol = position['symbol']
+    side = 'SELL' if position['side'] == 'BUY' else 'BUY'
+    qty = Decimal(position['quantity']).quantize(Decimal('1e-8'), rounding=ROUND_DOWN)
+
+    try:
+        client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type='MARKET',
+            quantity=str(qty)
+        )
+    except Exception as e:
+        logging.error(f"[청산 오류] {symbol} {reason}: {e}")
+        send_message(f"⚠️ 청산 실패 {symbol}: {e}")
+        return
+
+    # 메모리에서 제거
+    remove_position(position)
+
+    # 청산 알림
+    send_message(f"❌ {position['strategy']} {symbol} 청산({reason})")

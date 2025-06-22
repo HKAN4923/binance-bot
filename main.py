@@ -1,96 +1,72 @@
-# 파일명: main.py
-# 메인 실행 스크립트
-# core.py와 전략 모듈을 활용해 시장 분석 → 진입/청산 처리 → 텔레그램 알림 등을 수행합니다.
+# main.py
 
-import threading
 import time
 import logging
-
-from core import (
-    get_filtered_top_symbols,
-    get_open_positions,
-    get_position,
-    send_telegram
-)
-from config import MAX_POSITIONS, ANALYSIS_INTERVAL_SEC
-from trade_summary import start_summary_scheduler
-from position_monitor import PositionMonitor
-from order_manager import cancel_all_orders_for_symbol
-
+import threading
+from config import SYMBOLS, ANALYSIS_INTERVAL_SEC, POSITION_CHECK_INTERVAL_SEC
+from telegram_bot import send_message
 from strategy_orb import check_entry as orb_entry, check_exit as orb_exit
 from strategy_nr7 import check_entry as nr7_entry, check_exit as nr7_exit
-from strategy_pullback import check_entry as pb_entry, check_exit as pb_exit
 from strategy_ema_cross import check_entry as ema_entry, check_exit as ema_exit
-from binance_client import client
+from strategy_pullback import check_entry as pull_entry, check_exit as pull_exit
+from trade_summary import start_summary_scheduler
+from position_manager import get_positions
 
-# 잔재 주문 정리
-def cleanup_orphan_orders():
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s:%(message)s",
+    handlers=[logging.StreamHandler()]
+)
+
+# 시작 알림
+send_message("🤖 라쉬케4 자동매매 봇 시작됨")
+
+# 전략 진입 스케줄러
+def strategy_entry_loop():
     while True:
-        try:
-            tracked = set(get_open_positions().keys())
-            open_orders = client.futures_get_open_orders()  # client는 binance_client.py에서 글로벌
-            for o in open_orders:
-                sym = o['symbol']
-                if sym not in tracked:
-                    cancel_all_orders_for_symbol(sym)
-            time.sleep(10)
-        except Exception as e:
-            logging.error(f"cleanup_orphan_orders 오류: {e}")
-            time.sleep(10)
+        for symbol in SYMBOLS:
+            # ORB는 09:00~10:00, 21:00~22:00만
+            orb_entry(symbol)
 
-# 시장 분석 및 전략 실행
-def analyze_market():
-    # 심볼 풀 로드 (오류 심볼 사전 필터링)
-    symbols = get_filtered_top_symbols(100)
+            # NR7은 1시간마다 돌파 체크 (09시 이후부터 가능)
+            nr7_entry(symbol)
+
+            # EMA/RSI 전략
+            ema_entry(symbol)
+
+            # Pullback (단타전략)
+            pull_entry(symbol)
+
+        time.sleep(ANALYSIS_INTERVAL_SEC)
+
+# 전략 청산 스케줄러
+def position_monitor_loop():
     while True:
-        try:
-            current_positions = len(get_open_positions())
-            logging.info(f"분석중... ({current_positions}/{MAX_POSITIONS})")
-            # 진입 조건 체크
-            for sym in symbols:
-                if len(get_open_positions()) >= MAX_POSITIONS:
-                    break
-                orb_entry(sym)
-                nr7_entry(sym)
-                pb_entry(sym)
-                ema_entry(sym)
+        positions = get_positions()
+        for pos in positions:
+            symbol = pos["symbol"]
+            strategy = pos["strategy"]
 
-            # 청산 조건 체크
-            for sym in list(get_open_positions().keys()):
-                orb_exit(sym)
-                nr7_exit(sym)
-                pb_exit(sym)
-                ema_exit(sym)
+            if strategy == "ORB":
+                orb_exit(symbol)
+            elif strategy == "NR7":
+                nr7_exit(symbol)
+            elif strategy == "EMA":
+                ema_exit(symbol)
+            elif strategy == "Pullback":
+                pull_exit(symbol)
 
-            time.sleep(ANALYSIS_INTERVAL_SEC)
-        except Exception as e:
-            logging.error(f"analyze_market 오류: {e}")
-            time.sleep(5)
+        time.sleep(POSITION_CHECK_INTERVAL_SEC)
 
-if __name__ == "__main__":
-    # 로깅 설정
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-    try:
-        send_telegram("<b>🤖 봇 시작</b>")
-    except:
-        pass
+def main():
+    # 청산 모니터 스레드 시작
+    threading.Thread(target=position_monitor_loop, daemon=True).start()
 
-    # 요약 스케줄러 시작
+    # 2시간마다 요약 전송 스레드 시작
     start_summary_scheduler()
 
-    # 포지션 모니터링 스레드
-    pos_mon = PositionMonitor()
-    pos_mon.start()
+    # 진입 전략 루프 시작 (메인 스레드)
+    strategy_entry_loop()
 
-    # 주문 정리 및 시장 분석 스레드
-    threading.Thread(target=cleanup_orphan_orders, daemon=True).start()
-    threading.Thread(target=analyze_market, daemon=True).start()
-
-    # 메인 루프
-    try:
-        while True:
-            time.sleep(30)
-    except KeyboardInterrupt:
-        pos_mon.stop()
-        logging.info("봇 종료")
-        exit(0)
+if __name__ == "__main__":
+    main()

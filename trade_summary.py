@@ -1,75 +1,116 @@
-# 파일명: trade_summary.py
-# 거래 요약 스케줄러 모듈
-# 일정 시각마다 누적 손익 요약을 텔레그램으로 전송합니다.
+# trade_summary.py
 
+import os
+import json
 import threading
 import time
-import logging
-import pandas as pd
+from datetime import datetime
+from collections import defaultdict
+
 import matplotlib.pyplot as plt
-from utils import to_kst
-from telegram_bot import send_telegram, send_telegram_photo
-from config import SUMMARY_TIMES
 
-# 모듈 내부에 거래 로그 관리
-trade_log = []
-trade_log_lock = threading.Lock()
+from config import SUMMARY_INTERVAL_SEC, DATE_FORMAT
+from telegram_bot import send_message, send_photo
 
-
-def add_trade_entry(entry: dict) -> None:
-    """메인 코드에서 trade_log 기록 시 호출"""
-    with trade_log_lock:
-        trade_log.append(entry)
+# 거래 내역 저장 파일
+TRADE_HISTORY_FILE = "trade_history.json"
 
 
-def start_summary_scheduler() -> None:
+def _load_history() -> list:
+    """기록된 거래 내역 불러오기"""
+    if not os.path.isfile(TRADE_HISTORY_FILE):
+        with open(TRADE_HISTORY_FILE, "w") as f:
+            json.dump([], f)
+        return []
+    with open(TRADE_HISTORY_FILE, "r") as f:
+        return json.load(f)
+
+
+def record_trade(position: dict, exit_price: str, reason: str):
     """
-    SUMMARY_TIMES에 지정된 시각마다 요약 전송 스레드 시작
+    종료된 포지션을 거래 내역에 기록합니다.
+    PnL 계산 후 JSON 파일에 append.
     """
-    threading.Thread(target=_summary_loop, daemon=True).start()
+    history = _load_history()
+
+    entry_price = float(position["entry_price"])
+    qty         = float(position["quantity"])
+    exit_price_f= float(exit_price)
+    side        = position["side"]
+
+    # PnL 계산 (BUY: (exit-entry)*qty, SELL: (entry-exit)*qty)
+    pnl = (exit_price_f - entry_price) * qty if side == "BUY" else (entry_price - exit_price_f) * qty
+
+    record = {
+        "strategy":    position["strategy"],
+        "symbol":      position["symbol"],
+        "side":        side,
+        "entry_price": entry_price,
+        "exit_price":  exit_price_f,
+        "quantity":    qty,
+        "pnl":         pnl,
+        "reason":      reason,
+        "entry_time":  position["entry_time"],
+        "exit_time":   datetime.utcnow().strftime(DATE_FORMAT),
+    }
+
+    history.append(record)
+    with open(TRADE_HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=2)
 
 
-def _summary_loop() -> None:
-    last_sent = None
+def send_summary():
+    """
+    누적 손익을 전략별로 집계하여 텔레그램으로 전송합니다.
+    간단한 막대차트도 함께 전송합니다.
+    """
+    history = _load_history()
+    if not history:
+        send_message("📊 누적 손익 내역이 없습니다.")
+        return
+
+    strat_pnl = defaultdict(float)
+    for rec in history:
+        strat_pnl[rec["strategy"]] += rec["pnl"]
+
+    total_pnl = sum(strat_pnl.values())
+
+    # 메시지 구성
+    lines = ["📊 누적 손익 요약"]
+    for strat, pnl in strat_pnl.items():
+        lines.append(f"- {strat}: {pnl:.4f} USDT")
+    lines.append(f"전체: {total_pnl:.4f} USDT")
+    send_message("\n".join(lines))
+
+    # 차트 생성 및 전송
+    strategies = list(strat_pnl.keys())
+    pnls       = [strat_pnl[s] for s in strategies]
+
+    plt.figure()
+    plt.bar(strategies, pnls)
+    plt.title("전략별 누적 PnL")
+    plt.ylabel("USDT")
+    chart_path = "pnl_summary.png"
+    plt.tight_layout()
+    plt.savefig(chart_path)
+    plt.close()
+
+    send_photo(chart_path)
+
+
+def _summary_scheduler():
+    """
+    SUMMARY_INTERVAL_SEC 간격으로 자동으로 요약을 전송하는 스레드 함수입니다.
+    """
     while True:
-        try:
-            now = to_kst(time.time())
-            hour, minute = now.hour, now.minute
-            for (h, m) in SUMMARY_TIMES:
-                if hour == h and minute == m and last_sent != (h, m):
-                    with trade_log_lock:
-                        logs = list(trade_log)
-                    if logs:
-                        df = pd.DataFrame(logs)
-                        total_trades = len(df)
-                        win_trades = (df['pnl_usdt'] > 0).sum()
-                        lose_trades = total_trades - win_trades
-                        avg_pnl_pct = df['pnl_pct'].mean()
-                        total_pnl = df['pnl_usdt'].sum()
-                        # Equity Curve
-                        df['cumulative'] = df['pnl_usdt'].cumsum()
-                        img_path = f"equity_{h}_{m}.png"
-                        plt.figure()
-                        plt.plot(df['cumulative'])
-                        plt.title('Equity Curve')
-                        plt.xlabel('Trade Index')
-                        plt.ylabel('Cumulative PnL (USDT)')
-                        plt.savefig(img_path)
-                        plt.close()
-                        msg = (
-                            f"<b>🕒 Trade Summary {h:02d}:{m:02d}</b>\n"
-                            f"▶ Total Trades: {total_trades}\n"
-                            f"▶ Wins: {win_trades}\n"
-                            f"▶ Losses: {lose_trades}\n"
-                            f"▶ Avg PnL %: {avg_pnl_pct:.2f}\n"
-                            f"▶ Total PnL: {total_pnl:.2f} USDT"
-                        )
-                        send_telegram(msg)
-                        send_telegram_photo(img_path)
-                    else:
-                        send_telegram(f"<b>🕒 Trade Summary {h:02d}:{m:02d}</b>\nNo trades recorded.")
-                    last_sent = (h, m)
-            time.sleep(30)
-        except Exception as e:
-            logging.error(f"[Trade Summary 오류] {e}")
-            time.sleep(30)
+        time.sleep(SUMMARY_INTERVAL_SEC)
+        send_summary()
+
+
+def start_summary_scheduler():
+    """
+    데몬 스레드로 요약 스케줄러를 시작합니다.
+    main.py에서 이 함수를 호출해 주세요.
+    """
+    thread = threading.Thread(target=_summary_scheduler, daemon=True)
+    thread.start()

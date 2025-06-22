@@ -1,54 +1,74 @@
-# 파일명: position_manager.py
-# 라쉬케 4 - 포지션 상태 관리 전용 모듈
-# 각 전략의 진입/청산, 모니터링 등에서 사용됩니다.
+# position_manager.py
 
-import time
-from collections import defaultdict
+import json
+import os
+import logging
+from typing import List, Dict
+from config import MAX_POSITIONS
 
-# 메모리 기반 포지션 저장소
-_positions = defaultdict(dict)
+# 포지션을 저장할 파일
+POSITIONS_FILE = "positions.json"
 
-def can_enter(symbol: str, strategy: str) -> bool:
+
+def _load_positions() -> List[Dict]:
+    if not os.path.isfile(POSITIONS_FILE):
+        with open(POSITIONS_FILE, "w") as f:
+            json.dump([], f)
+        return []
+    try:
+        with open(POSITIONS_FILE, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.error(f"[포지션 로드 오류] {e}")
+        return []
+
+
+def _save_positions(positions: List[Dict]):
+    try:
+        with open(POSITIONS_FILE, "w") as f:
+            json.dump(positions, f, indent=2)
+    except Exception as e:
+        logging.error(f"[포지션 저장 오류] {e}")
+
+
+# 메모리 로드
+_positions: List[Dict] = _load_positions()
+
+
+def get_positions() -> List[Dict]:
+    """현재 보유 중인 포지션 목록 반환"""
+    return _positions
+
+
+def can_enter() -> bool:
+    """최대 포지션 수(MAX_POSITIONS) 미만일 때만 진입 허용"""
+    return len(_positions) < MAX_POSITIONS
+
+
+def add_position(position: Dict):
     """
-    동일 심볼 + 전략으로 이미 포지션이 존재하면 진입 금지
+    신규 포지션 등록.
+    최대치 초과 시 로깅만 하고 등록하지 않습니다.
     """
-    if symbol in _positions:
-        if _positions[symbol].get("strategy") == strategy:
-            return False
-    return True
+    if not can_enter():
+        logging.error(f"[포지션 초과] 최대 포지션 수({MAX_POSITIONS}) 도달, 등록 불가")
+        return
+    _positions.append(position)
+    _save_positions(_positions)
 
 
-def add_position(symbol: str, direction: str, entry_price: float, qty: float, strategy: str) -> None:
+def remove_position(position: Dict):
     """
-    포지션 등록
+    포지션 제거.
+    symbol, entry_time, strategy가 모두 일치하는 항목을 삭제합니다.
     """
-    _positions[symbol] = {
-        "symbol": symbol,
-        "side": direction,
-        "entry_price": entry_price,
-        "qty": qty,
-        "strategy": strategy,
-        "entry_time": time.time()
-    }
-
-
-def remove_position(symbol: str) -> None:
-    """
-    포지션 제거
-    """
-    if symbol in _positions:
-        del _positions[symbol]
-
-
-def get_open_positions() -> dict:
-    """
-    전체 보유 중인 포지션 딕셔너리 리턴
-    """
-    return dict(_positions)
-
-
-def get_position(symbol: str) -> dict:
-    """
-    특정 심볼 포지션 정보 리턴
-    """
-    return _positions.get(symbol, {})
+    global _positions
+    _positions = [
+        p for p in _positions
+        if not (
+            p.get("symbol") == position.get("symbol")
+            and p.get("entry_time") == position.get("entry_time")
+            and p.get("strategy") == position.get("strategy")
+        )
+    ]
+    _save_positions(_positions)

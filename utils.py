@@ -1,147 +1,49 @@
-# 파일명: utils.py
+# utils.py
+
 import os
-import json
 import logging
-from datetime import datetime, timezone, timedelta
-from decimal import Decimal, ROUND_DOWN
-from binance_client import client
-from risk_config import POSITION_RATIO, LEVERAGE, MIN_NOTIONAL
+from decimal import Decimal, getcontext, ROUND_DOWN
+import pandas as pd
+from binance_client import client, get_price
 
+# 소수점 정밀도
+getcontext().prec = 18
 
-def now_string() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def log_trade(data: dict) -> None:
-    """trade_log.json에 거래 기록 저장"""
-    path = "trade_log.json"
-    logs = []
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            logs = json.load(f)
-    logs.append(data)
-    with open(path, "w") as f:
-        json.dump(logs, f, indent=4)
-
-
-def get_futures_balance() -> float:
-    """USDT 선물 계정 잔고 조회"""
-    try:
-        balances = client.futures_account_balance()
-        for asset in balances:
-            if asset["asset"] == "USDT":
-                return float(asset["balance"])
-    except Exception as e:
-        logging.error(f"[잔고 조회 오류] {e}")
-    return 0.0
-
-
-def get_lot_size(symbol: str) -> float:
-    """심볼별 최소 주문 수량 (LOT_SIZE > stepSize)"""
-    try:
-        info = client.futures_exchange_info()
-        for s in info["symbols"]:
-            if s["symbol"] == symbol:
-                for f in s["filters"]:
-                    if f["filterType"] == "LOT_SIZE":
-                        return float(f["stepSize"])
-    except Exception as e:
-        logging.error(f"[LOT_SIZE 조회 오류] {symbol}: {e}")
-    return 0.0
+# 포지션당 진입 비율 (기본 자산의 20%)
+ALLOC_RATIO = Decimal(os.getenv("ALLOC_RATIO", "0.2"))
 
 
 def calculate_order_quantity(symbol: str) -> float:
-    """레버리지·포지션 비율·소수점 제한 기반 수량 계산"""
+    """
+    현재 USDT 잔고의 ALLOC_RATIO 비율만큼
+    해당 심볼 포지션 수량을 계산하여 반환합니다.
+    """
     try:
-        balance = Decimal(str(get_futures_balance()))
-        position_ratio = Decimal(str(POSITION_RATIO))
-        leverage = Decimal(str(LEVERAGE))
-        min_notional = Decimal(str(MIN_NOTIONAL))
-        amount = balance * position_ratio * leverage
-
-        price = Decimal(str(client.futures_symbol_ticker(symbol=symbol)["price"]))
-        raw_qty = amount / price
-
-        step = Decimal(str(get_lot_size(symbol)))
-        if step <= 0:
-            return 0.0
-
-        precision = -step.as_tuple().exponent
-        quant = Decimal(f"1e-{precision}")
-        qty = raw_qty.quantize(quant, rounding=ROUND_DOWN)
-
-        # 최소 거래 금액 미달 또는 0이면 무시
-        notional = qty * price
-        if qty <= Decimal("0") or notional < min_notional:
-            return 0.0
-
-        return float(qty)
-
+        balances = client.futures_account_balance()
+        balance_usdt = Decimal(
+            next(b["balance"] for b in balances if b["asset"] == "USDT")
+        )
     except Exception as e:
-        logging.error(f"[수량 계산 오류] {symbol}: {e}")
+        logging.error(f"[잔고 조회 오류] {e}")
         return 0.0
 
+    price = Decimal(str(get_price(symbol)))
+    if price <= 0:
+        return 0.0
+
+    qty = (balance_usdt * ALLOC_RATIO) / price
+    return float(qty.quantize(Decimal("1e-8"), rounding=ROUND_DOWN))
 
 
-def extract_entry_price(resp: dict) -> float:
-    try:
-        return float(resp["avgFillPrice"])
-    except:
-        try:
-            return float(resp["fills"][0]["price"])
-        except:
-            return 0.0
-
-
-def summarize_trades() -> str:
-    return "📊 누적 손익 요약 준비 중입니다."
-
-
-def get_filtered_top_symbols(n: int = 100) -> list:
-    from utils import get_lot_size
-    tradable = {
-        s["symbol"]
-        for s in client.futures_exchange_info()["symbols"]
-        if s["contractType"] == "PERPETUAL"
-        and s["quoteAsset"] == "USDT"
-        and s["status"] == "TRADING"
-    }
-    stats = client.futures_ticker()
-    pairs = [
-        (s["symbol"], float(s["quoteVolume"]))
-        for s in stats
-        if s["symbol"].endswith("USDT") and s["symbol"] in tradable
-    ]
-    pairs.sort(key=lambda x: x[1], reverse=True)
-    result = []
-    for sym, _ in pairs[:n]:
-        step = get_lot_size(sym)
-        if step and step > 0:
-            result.append(sym)
-        else:
-            logging.warning(f"[심볼 필터링] {sym} 제거 (minQty 없음)")
-    return result
-
-
-def to_kst(timestamp=None) -> datetime:
-    kst = timezone(timedelta(hours=9))
-    if timestamp is None:
-        return datetime.now(tz=kst)
-    if isinstance(timestamp, (int, float)):
-        return datetime.fromtimestamp(timestamp, tz=kst)
-    if isinstance(timestamp, datetime):
-        return timestamp.astimezone(kst)
-    raise ValueError("지원되지 않는 timestamp 형식입니다.")
-
-def get_tick_size(symbol: str) -> float:
-    """심볼별 최소 가격 단위(tickSize) 조회"""
-    try:
-        info = client.futures_exchange_info()
-        for s in info["symbols"]:
-            if s["symbol"] == symbol:
-                for f in s["filters"]:
-                    if f["filterType"] == "PRICE_FILTER":
-                        return float(f["tickSize"])
-    except Exception as e:
-        logging.error(f"[tickSize 조회 오류] {symbol}: {e}")
-    return 0.0
+def calculate_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
+    """
+    RSI 지표를 계산하여 반환합니다.
+    """
+    delta = prices.diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+    ma_up = up.ewm(alpha=1 / period, adjust=False).mean()
+    ma_down = down.ewm(alpha=1 / period, adjust=False).mean()
+    rs = ma_up / ma_down
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
