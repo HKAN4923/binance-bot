@@ -13,7 +13,7 @@ LEVERAGE = 5
 TIME_CUT_MINUTES = 120
 
 # ORB, NR7 전략을 위한 예약 슬롯 수
-RESERVED_SLOTS = 1
+RESERVED_SLOTS = 0
 
 # 진입 후 동일 심볼/전략 재진입 금지 시간 (단위: 분)
 COOLDOWN_MINUTES = 30
