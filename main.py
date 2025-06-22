@@ -40,11 +40,9 @@ def load_enabled_strategies():
 
 
 def print_analysis_status_loop():
-    """포지션 수 상태 출력"""
     positions = position_manager.get_positions()
     count = len(positions)
-    print(f"📡 분석중...({count}/{MAX_POSITIONS})")
-
+    print(f"📡 실시간 분석중...({count}/{MAX_POSITIONS})")
 
 def main_loop():
     """자동매매 루프 시작"""

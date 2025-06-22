@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
+from binance_client import client
 
 from risk_config import MAX_POSITIONS, COOLDOWN_MINUTES
 
@@ -27,7 +28,10 @@ def _save() -> None:
         POSITIONS_FILE.write_text(json.dumps(_positions_cache, indent=2))
 
 def get_positions() -> List[Dict[str, Any]]:
-    return list(_load_positions())
+    """Binance에서 실시간 오픈 포지션 반환"""
+    all_positions = client.futures_account()['positions']
+    open_positions = [p for p in all_positions if float(p['positionAmt']) != 0]
+    return open_positions
 
 def add_position(position: Dict[str, Any]) -> None:
     pos = _load_positions()
