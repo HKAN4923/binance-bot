@@ -47,3 +47,11 @@ def calculate_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     rs = ma_up / ma_down
     rsi = 100 - (100 / (1 + rs))
     return rsi
+
+from datetime import datetime, timedelta
+
+def to_kst(dt: datetime) -> datetime:
+    """
+    UTC → KST (UTC+9) 변환
+    """
+    return dt + timedelta(hours=9)
