@@ -111,3 +111,6 @@ def start_summary_scheduler() -> None:
             time.sleep(2 * 60 * 60)  # 2시간
 
     threading.Thread(target=_worker, daemon=True).start()
+
+import matplotlib.font_manager as fm
+plt.rcParams['font.family'] = 'NanumGothic'
