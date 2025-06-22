@@ -1,0 +1,10 @@
+"""Risk management configuration."""
+
+MAX_POSITIONS = 5
+CAPITAL_USAGE = 0.2
+LEVERAGE = 5
+TIME_CUT_MINUTES = 120
+RESERVED_SLOTS = 1  # Slots reserved for ORB/NR7
+USE_MARKET_TP_SL = False
+USE_MARKET_TP_SL_BACKUP = True
+COOLDOWN_MINUTES = 30
