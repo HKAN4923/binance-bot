@@ -2,7 +2,7 @@
 # 중앙 주문 처리 모듈
 # core.py에 정의된 함수·클래스를 활용하여
 # 지정가 진입 → 체결 확인 → TP/SL 설정 → 포지션 등록 과정을 수행합니다.
-
+import logging
 import time
 from binance_client import client, cancel_all_orders_for_symbol
 from core import (
@@ -20,6 +20,23 @@ from core import (
     remove_position,
     send_telegram
 )
+
+# binance_client.py
+
+def cancel_exit_orders_for_symbol(symbol: str):
+    """
+    지정 심볼의 모든 청산용 TP/SL 주문을 삭제합니다.
+    포지션이 없는 경우에도 해당 주문은 남아 있을 수 있습니다.
+    """
+    try:
+        open_orders = client.futures_get_open_orders(symbol=symbol)
+        for order in open_orders:
+            if order["reduceOnly"]:  # 청산용 주문만 선택
+                client.futures_cancel_order(symbol=symbol, orderId=order["orderId"])
+                logging.info(f"[청산 주문 삭제] {symbol} 주문 ID: {order['orderId']}")
+    except Exception as e:
+        logging.error(f"[청산 주문 삭제 오류] {symbol}: {e}")
+
 
 from decimal import Decimal
 
