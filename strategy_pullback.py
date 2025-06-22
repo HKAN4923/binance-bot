@@ -1,4 +1,8 @@
-"""Donchian 기반 Pullback 전략 모듈"""
+"""Donchian 기반 Pullback 전략 모듈 (개선 버전)
+ - 랜덤 진입 확률 낮춤 (보수적 조건)
+ - RSI 또는 Volume 필터 반드시 통과해야 진입
+ - 심볼별 30분 쿨타임 적용
+"""
 
 import datetime
 import random
@@ -15,7 +19,6 @@ class StrategyPullback:
         self.last_entry_time = {}  # {symbol: 마지막 진입 시각}
 
     def is_in_cooldown(self, symbol: str) -> bool:
-        """30분 재진입 제한"""
         now = datetime.datetime.utcnow()
         last = self.last_entry_time.get(symbol)
         if last is None:
@@ -23,15 +26,13 @@ class StrategyPullback:
         return (now - last).total_seconds() < 1800  # 30분
 
     def check_entry(self):
-        """진입 조건 확인"""
-
         symbol = random.choice(["SOLUSDT", "MATICUSDT", "DOGEUSDT"])
         if self.is_in_cooldown(symbol):
             return None
 
-        # 시뮬레이션 로직: Donchian 돌파 후 되돌림 + 필터 통과 시 진입
-        breakout = random.random() < 0.3
-        pullback = random.random() < 0.3
+        # 보수적 조건: breakout & pullback 모두 충족 + 필터 중 하나는 반드시 True
+        breakout = random.random() < 0.25
+        pullback = random.random() < 0.25
         rsi_filter = random.random() < 0.5
         volume_filter = random.random() < 0.5
 

@@ -1,4 +1,8 @@
-"""EMA 교차 + RSI 필터 전략 모듈"""
+"""EMA 교차 + RSI 전략 모듈 (개선 버전)
+ - RSI 조건 강화: 55 이상/45 이하만 진입
+ - EMA 9/21 교차 조건
+ - 심볼별 30분 쿨타임 적용
+"""
 
 import datetime
 import random
@@ -16,7 +20,6 @@ class StrategyEMACross:
         self.last_entry_time = {}  # {symbol: 시각}
 
     def is_in_cooldown(self, symbol: str) -> bool:
-        """재진입 제한 확인 (기본 30분)"""
         now = datetime.datetime.utcnow()
         last = self.last_entry_time.get(symbol)
         if last is None:
@@ -24,22 +27,18 @@ class StrategyEMACross:
         return (now - last).total_seconds() < 1800  # 30분
 
     def check_entry(self):
-        """진입 조건 충족 시 시그널 반환"""
-
         symbol = random.choice(["BNBUSDT", "AVAXUSDT", "LINKUSDT"])
         if self.is_in_cooldown(symbol):
             return None
 
-        # 실제 환경에서는 캔들 불러와서 EMA/RSI 계산 필요
+        # 실제 환경에서는 캔들 데이터 불러와 EMA 계산 필요
         ema_9 = 25.0
         ema_21 = 24.0
-        rsi = random.randint(45, 65)
+        rsi = random.randint(40, 60)
 
-        # 조건: 골든크로스 + RSI > 50 → 롱
-        # 조건: 데드크로스 + RSI < 50 → 숏
-        if ema_9 > ema_21 and rsi > 50:
+        if ema_9 > ema_21 and rsi >= 55:
             side = "LONG"
-        elif ema_9 < ema_21 and rsi < 50:
+        elif ema_9 < ema_21 and rsi <= 45:
             side = "SHORT"
         else:
             return None

@@ -1,4 +1,8 @@
-"""NR7 전략 모듈"""
+"""NR7 전략 모듈 (라쉬케 기준 적용)
+ - 한국/중국/미국장 시작 시간대만 진입 (KST 기준)
+ - 하루 동일 심볼 최대 3회 진입 허용
+ - 진입 조건 보수적 설정
+"""
 
 import datetime
 import random
@@ -13,42 +17,39 @@ class StrategyNR7:
     name = "NR7"
 
     def __init__(self):
-        self.entered_blocks = set()  # (symbol:날짜:시간대)
+        self.entry_counter = {}  # {symbol: {날짜: 진입횟수}}
 
-    def get_active_block(self) -> tuple[str, str] | None:
-        """현재가 속한 전략 실행 시간대(KOR/CHN/USA) 블록 반환"""
+    def get_active_block(self) -> bool:
+        """현재 시각이 전략 허용 시간대인지 확인"""
         now_kst = to_kst(datetime.datetime.utcnow())
         current = now_kst.time()
-        date = now_kst.date().isoformat()
 
-        blocks = {
-            "KOR": (datetime.time(9, 0), datetime.time(10, 0)),
-            "CHN": (datetime.time(10, 0), datetime.time(11, 0)),
-            "USA": (datetime.time(21, 0), datetime.time(22, 0)),
-        }
+        kor_block = datetime.time(9, 0) <= current <= datetime.time(10, 0)
+        chn_block = datetime.time(10, 0) <= current <= datetime.time(11, 0)
+        usa_block = datetime.time(21, 0) <= current <= datetime.time(22, 0)
 
-        for block_name, (start, end) in blocks.items():
-            if start <= current <= end:
-                return (date, block_name)
-
-        return None
+        return kor_block or chn_block or usa_block
 
     def check_entry(self):
         """진입 조건 충족 시 시그널 반환"""
 
-        block = self.get_active_block()
-        if block is None:
+        if not self.get_active_block():
             return None
+
+        now_kst = to_kst(datetime.datetime.utcnow())
+        date_str = now_kst.date().isoformat()
 
         symbol = random.choice(["ETHUSDT", "BNBUSDT", "XRPUSDT"])
-        block_id = f"{symbol}:{block[0]}:{block[1]}"
-        if block_id in self.entered_blocks:
+        count = self.entry_counter.get(symbol, {}).get(date_str, 0)
+        if count >= 3:
             return None
 
-        if random.random() < 0.05:
+        # 보수적 진입 조건
+        if random.random() < 0.025:
             side = random.choice(["LONG", "SHORT"])
             entry_price = round(random.uniform(10, 50), 2)
-            self.entered_blocks.add(block_id)
+            self.entry_counter.setdefault(symbol, {}).setdefault(date_str, 0)
+            self.entry_counter[symbol][date_str] += 1
             return {
                 "symbol": symbol,
                 "side": side,
