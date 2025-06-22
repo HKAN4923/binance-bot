@@ -9,7 +9,7 @@ import trade_summary
 import utils
 from binance_client import client
 from risk_config import USE_MARKET_TP_SL, USE_MARKET_TP_SL_BACKUP, TP_SL_SLIPPAGE_RATE
-
+from risk_config import LEVERAGE
 POSITIONS_TO_MONITOR: List[Dict[str, Any]] = []
 
 
