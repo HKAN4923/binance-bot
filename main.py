@@ -12,6 +12,16 @@ from strategy_pullback import check_entry as pull_entry, check_exit as pull_exit
 from trade_summary import start_summary_scheduler
 from position_manager import get_positions
 
+def print_analysis_status_loop():
+    """
+    10초마다 현재 진입 포지션 수를 출력
+    """
+    from config import MAX_POSITIONS
+    while True:
+        current = len(get_positions())
+        print(f"분석중...({current}/{MAX_POSITIONS})", flush=True)
+        time.sleep(10)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s:%(message)s",
@@ -62,11 +72,15 @@ def main():
     # 청산 모니터 스레드 시작
     threading.Thread(target=position_monitor_loop, daemon=True).start()
 
-    # 2시간마다 요약 전송 스레드 시작
+    # 상태 출력 스레드 시작
+    threading.Thread(target=print_analysis_status_loop, daemon=True).start()
+
+    # 요약 전송 스레드 시작
     start_summary_scheduler()
 
-    # 진입 전략 루프 시작 (메인 스레드)
+    # 전략 진입 루프 (메인 스레드)
     strategy_entry_loop()
+
 
 if __name__ == "__main__":
     main()
