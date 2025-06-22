@@ -35,7 +35,23 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> Dict[str, A
         except Exception as e:
             logging.warning(f"[레버리지 설정 실패] {symbol}: {e}")
 
-        qty = utils.calculate_order_quantity(symbol, entry_price)
+        # ✅ 실제 USDT 잔고 조회
+        try:
+            balances = client.futures_account_balance()
+            usdt_balance = next((b for b in balances if b["asset"] == "USDT"), None)
+            if usdt_balance is None:
+                raise Exception("USDT 잔고 정보를 찾을 수 없습니다.")
+            usdt = float(usdt_balance["balance"])
+        except Exception as e:
+            logging.error(f"[잔고 조회 실패] {e}")
+            return {}
+
+        # ✅ 주문 수량 계산 (실제 잔고 반영)
+        qty = utils.calculate_order_quantity(symbol, entry_price, balance=usdt)
+        if qty <= 0:
+            logging.error(f"[오류] 계산된 주문 수량이 0 이하입니다: {qty}")
+            return {}
+
         side_binance = "BUY" if side.upper() == "LONG" else "SELL"
 
         order = client.futures_create_order(
