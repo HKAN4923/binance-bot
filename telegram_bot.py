@@ -1,56 +1,48 @@
-"""Utility functions for sending messages to Telegram."""
+"""텔레그램 전송 모듈"""
 
-from __future__ import annotations
-
-import json
 import logging
 import os
-import urllib.parse
-import urllib.request
-from typing import Optional
+import requests
 
+from dotenv import load_dotenv
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+load_dotenv()
+
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-API_URL = "https://api.telegram.org/bot{token}/{method}"
 
-
-def _post(method: str, data: dict) -> None:
-    """Internal helper to send POST requests to Telegram."""
-    if not TOKEN or not CHAT_ID:
-        logging.info("Telegram credentials not set. Skipping send.")
-        return
-
-    url = API_URL.format(token=TOKEN, method=method)
-    encoded = urllib.parse.urlencode(data).encode()
-    try:
-        with urllib.request.urlopen(url, data=encoded, timeout=10) as resp:
-            resp.read()
-    except Exception as exc:  # pragma: no cover - network errors not fatal
-        logging.error("Telegram send failed: %s", exc)
+API_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 
 def send_message(text: str) -> None:
-    """Send a text message to the configured chat."""
-    _post("sendMessage", {"chat_id": CHAT_ID, "text": text})
-
-
-def send_photo(photo_path: str, caption: Optional[str] = None) -> None:
-    """Send a photo from a file path with optional caption."""
+    """텔레그램 텍스트 메시지 전송"""
     if not TOKEN or not CHAT_ID:
-        logging.info("Telegram credentials not set. Skipping photo send.")
+        logging.warning("[텔레그램] 설정 정보 없음 - 메시지 전송 생략")
         return
 
-    url = API_URL.format(token=TOKEN, method="sendPhoto")
-    with open(photo_path, "rb") as f:
-        data = {
-            "chat_id": CHAT_ID,
-            "caption": caption or "",
-        }
-        form_data = urllib.parse.urlencode(data).encode()
-        try:
-            request = urllib.request.Request(url, data=form_data)
-            with urllib.request.urlopen(request, timeout=10) as resp:
-                resp.read()
-        except Exception as exc:  # pragma: no cover
-            logging.error("Telegram photo send failed: %s", exc)
+    try:
+        url = f"{API_URL}/sendMessage"
+        payload = {"chat_id": CHAT_ID, "text": text}
+        response = requests.post(url, data=payload, timeout=10)
+        response.raise_for_status()
+        logging.info("[텔레그램] 메시지 전송 성공")
+    except Exception as e:
+        logging.error(f"[텔레그램] 메시지 전송 실패: {e}")
+
+
+def send_photo(photo_path: str, caption: str = "") -> None:
+    """텔레그램 이미지 전송"""
+    if not TOKEN or not CHAT_ID:
+        logging.warning("[텔레그램] 설정 정보 없음 - 이미지 전송 생략")
+        return
+
+    try:
+        url = f"{API_URL}/sendPhoto"
+        with open(photo_path, "rb") as photo:
+            files = {"photo": photo}
+            data = {"chat_id": CHAT_ID, "caption": caption}
+            response = requests.post(url, files=files, data=data, timeout=10)
+            response.raise_for_status()
+            logging.info("[텔레그램] 이미지 전송 성공")
+    except Exception as e:
+        logging.error(f"[텔레그램] 이미지 전송 실패: {e}")

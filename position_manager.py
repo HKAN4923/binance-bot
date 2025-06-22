@@ -1,6 +1,4 @@
-"Manage open positions for the trading bot."""
-
-from __future__ import annotations
+"""포지션 상태 관리 모듈"""
 
 import json
 import logging
@@ -8,83 +6,89 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
 
-import utils
-from risk_config import COOLDOWN_MINUTES, MAX_POSITIONS, RESERVED_SLOTS
-
+from risk_config import MAX_POSITIONS, RESERVED_SLOTS, COOLDOWN_MINUTES
 
 POSITIONS_FILE = Path("positions.json")
-
-# In-memory cache of positions
-_positions: List[Dict[str, Any]] | None = None
+_positions_cache: List[Dict[str, Any]] | None = None
 
 
 def _load_positions() -> List[Dict[str, Any]]:
-    global _positions
-    if _positions is None:
+    global _positions_cache
+    if _positions_cache is None:
         if POSITIONS_FILE.exists():
-            _positions = json.loads(POSITIONS_FILE.read_text())
+            _positions_cache = json.loads(POSITIONS_FILE.read_text())
         else:
-            _positions = []
-    return _positions
+            _positions_cache = []
+    return _positions_cache
 
 
 def _save() -> None:
-    if _positions is not None:
-        POSITIONS_FILE.write_text(json.dumps(_positions, indent=2))
+    if _positions_cache is not None:
+        POSITIONS_FILE.write_text(json.dumps(_positions_cache, indent=2))
 
 
 def get_positions() -> List[Dict[str, Any]]:
-    """Return current positions."""
+    """현재 열려 있는 포지션 반환"""
     return list(_load_positions())
 
 
-def can_enter(strategy_name: str) -> bool:
-    """Return True if a new position can be opened for given strategy."""
-    positions = _load_positions()
-    if len(positions) >= MAX_POSITIONS:
-        return False
-
-    if strategy_name.upper() in {"ORB", "NR7"}:
-        # reserved slots for ORB/NR7 strategies
-        non_reserved = [p for p in positions if p["strategy"] not in {"ORB", "NR7"}]
-        if len(non_reserved) >= MAX_POSITIONS - RESERVED_SLOTS:
-            return False
-    return True
-
-
 def add_position(position: Dict[str, Any]) -> None:
-    """Add a position to the list and persist."""
-    positions = _load_positions()
-    positions.append(position)
+    """포지션 등록 및 저장"""
+    pos = _load_positions()
+    pos.append(position)
     _save()
 
 
 def remove_position(position: Dict[str, Any]) -> None:
-    """Remove a position from storage."""
-    positions = _load_positions()
+    """포지션 제거"""
+    pos = _load_positions()
     try:
-        positions.remove(position)
+        pos.remove(position)
         _save()
     except ValueError:
         pass
 
 
 def is_duplicate(symbol: str, strategy_name: str) -> bool:
-    """Check if the symbol is already traded by the same strategy."""
-    for pos in _load_positions():
-        if pos["symbol"] == symbol and pos["strategy"] == strategy_name:
+    """같은 심볼+전략 중복 진입 여부 확인"""
+    for p in _load_positions():
+        if p["symbol"] == symbol and p["strategy"] == strategy_name:
             return True
     return False
 
 
 def is_in_cooldown(symbol: str, strategy_name: str) -> bool:
-    """Check if a position is in cooldown period."""
+    """최근 진입한 포지션이 30분 이내인지 확인"""
     now = datetime.utcnow()
-    for pos in _load_positions():
+    for p in _load_positions():
         if (
-            pos["symbol"] == symbol
-            and pos["strategy"] == strategy_name
-            and now - datetime.fromisoformat(pos["entry_time"]) < timedelta(minutes=COOLDOWN_MINUTES)
+            p["symbol"] == symbol
+            and p["strategy"] == strategy_name
+            and "entry_time" in p
         ):
-            return True
+            try:
+                entered = datetime.fromisoformat(p["entry_time"])
+                if now - entered < timedelta(minutes=COOLDOWN_MINUTES):
+                    return True
+            except Exception as e:
+                logging.warning("entry_time 파싱 오류: %s", e)
     return False
+
+
+def can_enter(strategy_name: str) -> bool:
+    """현재 전략이 진입 가능한 상태인지 확인"""
+
+    pos = _load_positions()
+    if len(pos) >= MAX_POSITIONS:
+        return False
+
+    # ORB/NR7 우선 전략은 RESERVED 슬롯 보장
+    if strategy_name.upper() in {"ORB", "NR7"}:
+        return True
+
+    # EMA/PULLBACK은 시간대에 따라 제한 적용됨
+    non_reserved = [p for p in pos if p["strategy"] not in {"ORB", "NR7"}]
+    if len(non_reserved) >= MAX_POSITIONS - RESERVED_SLOTS:
+        return False
+
+    return True

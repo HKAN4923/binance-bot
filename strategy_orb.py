@@ -1,32 +1,59 @@
-"""Opening Range Breakout strategy."""
+"""Opening Range Breakout (ORB) 전략 모듈"""
 
-from __future__ import annotations
-
-import logging
+import datetime
 import random
-from datetime import datetime, timedelta
 
 import utils
+from utils import to_kst
 
 
 class StrategyORB:
-    """Simplified ORB strategy implementation."""
+    """ORB 전략 클래스"""
 
     name = "ORB"
 
-    def __init__(self) -> None:
-        self.entered = False
-        self.start_time = datetime.utcnow()
+    def __init__(self):
+        self.entered_blocks = set()  # (symbol, block_id)
+
+    def get_active_block(self) -> tuple[str, str] | None:
+        """현재가 속한 전략 실행 시간대(KOR/CHN/USA) 블록 반환"""
+        now_kst = to_kst(datetime.datetime.utcnow())
+        current = now_kst.time()
+        date = now_kst.date().isoformat()
+
+        blocks = {
+            "KOR": (datetime.time(9, 0), datetime.time(10, 0)),
+            "CHN": (datetime.time(10, 0), datetime.time(11, 0)),
+            "USA": (datetime.time(21, 0), datetime.time(22, 0)),
+        }
+
+        for block_name, (start, end) in blocks.items():
+            if start <= current <= end:
+                return (date, block_name)
+
+        return None
 
     def check_entry(self):
-        """Return an entry signal if conditions are met."""
-        if self.entered:
+        """진입 조건 충족 시 시그널 반환"""
+
+        block = self.get_active_block()
+        if block is None:
             return None
-        # allow entry only within first hour
-        if datetime.utcnow() - self.start_time > timedelta(hours=1):
+
+        symbol = random.choice(["BTCUSDT", "ETHUSDT", "SOLUSDT"])
+
+        block_id = f"{symbol}:{block[0]}:{block[1]}"  # 예: BTCUSDT:2025-06-22:KOR
+        if block_id in self.entered_blocks:
             return None
-        if random.random() < 0.1:  # pseudo condition
-            self.entered = True
+
+        if random.random() < 0.05:
             side = random.choice(["LONG", "SHORT"])
-            return {"symbol": "BTCUSDT", "side": side, "entry_price": 100.0}
+            entry_price = round(random.uniform(50, 100), 2)
+            self.entered_blocks.add(block_id)
+            return {
+                "symbol": symbol,
+                "side": side,
+                "entry_price": entry_price,
+            }
+
         return None
