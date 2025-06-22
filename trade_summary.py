@@ -8,8 +8,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-import matplotlib.pyplot as plt
-
 import telegram_bot
 
 TRADES_FILE = Path("trades.json")
@@ -50,25 +48,6 @@ def summarize_by_strategy() -> Dict[str, Any]:
     return summary
 
 
-def generate_equity_curve(path: str = "equity.png") -> None:
-    """누적 손익 그래프 생성"""
-    trades = _load_trades()
-    equity = 0
-    curve = []
-    for t in trades:
-        equity += t.get("pnl", 0)
-        curve.append(equity)
-
-    plt.figure()
-    plt.plot(curve, label="누적 수익")
-    plt.title("Equity Curve (누적 손익 그래프)")
-    plt.xlabel("거래 횟수")
-    plt.ylabel("PnL")
-    plt.legend()
-    plt.savefig(path)
-    plt.close()
-
-
 def send_telegram() -> None:
     """전략별 요약 메시지 전송"""
     summary = summarize_by_strategy()
@@ -93,24 +72,15 @@ def send_telegram() -> None:
     telegram_bot.send_message("\n".join(lines))
 
 
-def send_telegram_photo(path: str = "equity.png") -> None:
-    """손익 그래프 이미지 전송"""
-    telegram_bot.send_photo(path, caption="📉 누적 손익 그래프")
-
-
 def start_summary_scheduler() -> None:
-    """2시간마다 자동 요약 스케줄 시작"""
+    """2시간마다 자동 요약 스케줄 시작 (그래프 제외)"""
     def _worker():
         while True:
             try:
                 send_telegram()
-                generate_equity_curve()
-                send_telegram_photo()
+                # 그래프 생략됨
             except Exception as e:
                 logging.error(f"[오류] 요약 전송 실패: {e}")
-            time.sleep(2 * 60 * 60)  # 2시간
+            time.sleep(2 * 60 * 60)
 
     threading.Thread(target=_worker, daemon=True).start()
-
-import matplotlib.font_manager as fm
-plt.rcParams['font.family'] = 'NanumGothic'
