@@ -65,10 +65,8 @@ def main_loop():
                     order_manager.place_entry_order(
                         signal["symbol"], signal["side"], strat.name
                     )
-                    telegram_bot.send_message(
-                        f"[{strat.name}] {signal['symbol']} {signal['side']} 진입!"
-                    )
-
+                    
+                    
             order_manager.monitor_positions()
             print_analysis_status_loop()
             time.sleep(10)

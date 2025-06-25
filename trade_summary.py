@@ -59,7 +59,7 @@ def send_telegram() -> None:
 
     for strat, data in summary.items():
         lines.append(
-            f"[{strat}] 승률: {data['win_rate']:.1f}% | 손익: {data['pnl']:.2f} USDT"
+            f"[{strat}] 진입: {data['trades']}회 | 승률: {data['win_rate']:.1f}% | 손익: {data['pnl']:.2f} USDT"
         )
         total_pnl += data["pnl"]
         total_wins += data["wins"]
