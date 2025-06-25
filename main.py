@@ -26,18 +26,28 @@ logging.basicConfig(
     ]
 )
 
+# 고정 심볼 리스트 (시장성이 높은 50개)
+SYMBOL_LIST = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT",
+    "DOTUSDT", "MATICUSDT", "LTCUSDT", "TRXUSDT", "NEARUSDT", "UNIUSDT", "ATOMUSDT", "ETCUSDT", "ICPUSDT",
+    "FILUSDT", "XLMUSDT", "SANDUSDT", "EGLDUSDT", "APEUSDT", "AAVEUSDT", "DYDXUSDT", "RUNEUSDT", "FTMUSDT",
+    "INJUSDT", "GMXUSDT", "SNXUSDT", "ARBUSDT", "GRTUSDT", "CHZUSDT", "BLURUSDT", "CFXUSDT", "TWTUSDT",
+    "ENSUSDT", "BANDUSDT", "FLOWUSDT", "ROSEUSDT", "CRVUSDT", "1INCHUSDT", "ZILUSDT", "KAVAUSDT", "STMXUSDT",
+    "WAVESUSDT", "BCHUSDT", "ZRXUSDT", "MINAUSDT", "LINAUSDT"
+]
+
 
 def load_enabled_strategies():
-    """활성화된 전략 목록 반환"""
+    """활성화된 전략 목록 반환 (심볼 리스트 포함)"""
     strategies = []
     if config.ORB_ENABLED:
-        strategies.append(StrategyORB())
+        strategies.append(StrategyORB(SYMBOL_LIST))
     if config.NR7_ENABLED:
-        strategies.append(StrategyNR7())
+        strategies.append(StrategyNR7(SYMBOL_LIST))
     if config.EMA_ENABLED:
-        strategies.append(StrategyEMACross())
+        strategies.append(StrategyEMACross(SYMBOL_LIST))
     if config.PULLBACK_ENABLED:
-        strategies.append(StrategyPullback())
+        strategies.append(StrategyPullback(SYMBOL_LIST))
     return strategies
 
 
@@ -46,19 +56,24 @@ def print_analysis_status_loop():
     count = len(positions)
     print(f"📡 실시간 분석중...({count}/{MAX_POSITIONS})")
 
+
 def main_loop():
     """자동매매 루프 시작"""
     telegram_bot.send_message("🚀 자동매매 봇이 시작되었습니다.")
-
     strategies = load_enabled_strategies()
     trade_summary.start_summary_scheduler()
 
+    symbol_index = 0  # 순차 탐색용 인덱스
+
     while True:
         try:
+            symbol = SYMBOL_LIST[symbol_index]
+            symbol_index = (symbol_index + 1) % len(SYMBOL_LIST)
+
             for strat in strategies:
                 if not position_manager.can_enter(strat.name):
                     continue
-                signal = strat.check_entry()
+                signal = strat.check_entry(symbol)
                 if signal:
                     if position_manager.is_duplicate(signal["symbol"], strat.name):
                         continue
@@ -67,11 +82,10 @@ def main_loop():
                     order_manager.place_entry_order(
                         signal["symbol"], signal["side"], strat.name
                     )
-                    
 
             order_manager.monitor_positions()
             print_analysis_status_loop()
-            time.sleep(10)
+            time.sleep(5)  # 5초마다 순차적으로 하나의 심볼 분석
 
         except Exception as e:
             logging.error(f"[오류] 메인 루프 중단됨: {e}")
