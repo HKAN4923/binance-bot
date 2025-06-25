@@ -36,9 +36,9 @@ class StrategyEMACross:
         ema_21 = 24.0
         rsi = random.randint(40, 60)
 
-        if ema_9 > ema_21 and rsi >= 55:
+        if ema_9 > ema_21 and rsi >= 50:
             side = "LONG"
-        elif ema_9 < ema_21 and rsi <= 45:
+        elif ema_9 < ema_21 and rsi <= 50:
             side = "SHORT"
         else:
             return None

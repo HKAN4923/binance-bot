@@ -13,7 +13,9 @@ from strategy_nr7 import StrategyNR7
 from strategy_ema_cross import StrategyEMACross
 from strategy_pullback import StrategyPullback
 from risk_config import MAX_POSITIONS
+from trade_summary import start_daily_file_sender
 
+start_daily_file_sender()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,7 +68,7 @@ def main_loop():
                         signal["symbol"], signal["side"], strat.name
                     )
                     
-                    
+
             order_manager.monitor_positions()
             print_analysis_status_loop()
             time.sleep(10)

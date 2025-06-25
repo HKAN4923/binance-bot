@@ -51,7 +51,7 @@ def summarize_by_strategy() -> Dict[str, Any]:
 def send_telegram() -> None:
     """전략별 요약 메시지 전송"""
     summary = summarize_by_strategy()
-    lines = [f"📊 전략별 누적 요약 ({datetime.now().strftime('%H:%M')})"]
+    lines = [f"📊 전략별 누적 요약 "]
 
     total_pnl = 0
     total_wins = 0
@@ -82,5 +82,26 @@ def start_summary_scheduler() -> None:
             except Exception as e:
                 logging.error(f"[오류] 요약 전송 실패: {e}")
             time.sleep(2 * 60 * 60)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+def send_trade_file_daily():
+    """trades.json 파일을 하루 1회 텔레그램으로 전송"""
+    try:
+        with open("trades.json", "rb") as f:
+            telegram_bot.send_document(f, filename="trades.json")
+        logging.info("[전송] trades.json 파일 텔레그램 전송 완료")
+    except Exception as e:
+        logging.error(f"[오류] 거래 로그 전송 실패: {e}")
+
+def start_daily_file_sender():
+    """매일 자정에 trades.json 파일 텔레그램으로 전송"""
+    def _worker():
+        while True:
+            now = datetime.now()
+            if now.hour == 0 and now.minute == 0:
+                send_trade_file_daily()
+                time.sleep(61)  # 중복 방지
+            time.sleep(30)  # 30초마다 확인
 
     threading.Thread(target=_worker, daemon=True).start()
