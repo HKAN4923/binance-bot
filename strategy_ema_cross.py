@@ -3,6 +3,8 @@
  - EMA 9/21 교차 확인
  - 캔들 기반 실시간 계산
 """
+# 👇 이 줄을 맨 위나 다른 import 아래 추가
+import random
 
 import datetime
 import pandas as pd
@@ -51,9 +53,9 @@ class StrategyEMACross:
         rsi = df["rsi"].iloc[-1]
         price = df["close"].iloc[-1]
 
-        if ema_9 > ema_21 and rsi >= 52:
+        if ema_9 > ema_21 and rsi >= 53:
             side = "LONG"
-        elif ema_9 < ema_21 and rsi <= 48:
+        elif ema_9 < ema_21 and rsi <= 47:
             side = "SHORT"
         else:
             return None
@@ -74,8 +76,8 @@ def check_exit(self, symbol: str, entry_side: str) -> bool:
     ema_21 = 24.0
     rsi = random.randint(40, 60)
 
-    if entry_side == "LONG" and ema_9 < ema_21 and rsi < 48:
+    if entry_side == "LONG" and ema_9 < ema_21 and rsi < 47:
         return True
-    if entry_side == "SHORT" and ema_9 > ema_21 and rsi > 52:
+    if entry_side == "SHORT" and ema_9 > ema_21 and rsi > 53:
         return True
     return False

@@ -19,7 +19,7 @@ RESERVED_SLOTS = 0
 COOLDOWN_MINUTES = 30
 
 # TP/SL 설정 방식
-USE_MARKET_TP_SL = False             # 기본: 지정가 TP/SL
+USE_MARKET_TP_SL = True             # 기본: 지정가 TP/SL
 USE_MARKET_TP_SL_BACKUP = True      # 지정가 실패 시 감시 후 시장가 청산으로 대체
 
 # TP/SL 기준 슬리피지 비율 (지정가로 설정 시 여유 범위)
