@@ -1,4 +1,7 @@
+
+
 import logging
+logging.basicConfig(level=logging.DEBUG)
 import time
 
 import config
@@ -91,4 +94,4 @@ if __name__ == "__main__":
     
     main_loop()
 
-logging.basicConfig(level=logging.DEBUG)
+
