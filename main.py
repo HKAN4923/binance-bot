@@ -84,5 +84,14 @@ def main_loop():
             logging.error(f"[오류] 메인 루프 중단됨: {e}")
             time.sleep(10)
 
+import json
+from pathlib import Path
+
+def clear_json_files():
+    for filename in ["trades.json", "positions.json"]:
+        path = Path(filename)
+        if path.exists():
+            path.write_text("[]")
 if __name__ == "__main__":
+    clear_json_files()
     main_loop()

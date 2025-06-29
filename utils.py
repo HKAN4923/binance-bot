@@ -1,12 +1,22 @@
-"""utils.py - 라쉬케5 전략 보조 함수 모음
- - 정확한 수량/가격 반올림
- - 심볼별 precision 정보 처리
- - 실시간 수량 계산 (잔고 기준)
+"""utils.py - 라쉬케5 전략 보조 함수 (최종 안정 버전)
+ - 수량/가격 정밀도 반올림
+ - 실시간 잔고 기준 수량 계산
+ - 최소 주문 금액 필터 포함
 """
 
 from decimal import Decimal, ROUND_DOWN
-from binance_client import get_symbol_precision, get_futures_balance
+from binance_client import get_symbol_precision, client
 from risk_config import CAPITAL_USAGE, LEVERAGE
+
+MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT 기준)
+
+def get_futures_balance() -> float:
+    """바이낸스 선물 계정의 USDT 잔고 반환"""
+    balances = client.futures_account_balance()
+    for asset in balances:
+        if asset["asset"] == "USDT":
+            return float(asset["balance"])
+    return 0.0
 
 def round_quantity(symbol: str, qty: float) -> float:
     """심볼별 수량 반올림 (step_size 기준)"""
@@ -21,19 +31,21 @@ def round_price(symbol: str, price: float) -> float:
     return max(rounded_price, float(tick_size))
 
 def calculate_order_quantity(symbol: str, price: float, balance: float = None) -> float:
-    """잔고, 비율, 레버리지 기준으로 수량 계산 후 정확히 반올림"""
+    """잔고, 비율, 레버리지 기준으로 수량 계산 후 정밀도 처리 및 최소 notional 체크"""
     if balance is None:
         balance = get_futures_balance()
     raw_qty = balance * CAPITAL_USAGE * LEVERAGE / price
-    return round_quantity(symbol, raw_qty)
+    qty = round_quantity(symbol, raw_qty)
+    notional = qty * price
+    if notional < MIN_NOTIONAL:
+        return 0.0  # 최소 주문 금액 미만이면 진입하지 않음
+    return qty
 
 def to_kst(dt):
-    """UTC 시간을 한국 시간으로 변환"""
     from datetime import timedelta
     return dt + timedelta(hours=9)
 
 def calculate_rsi(prices: list, period: int = 14) -> float:
-    """RSI 계산 보조 함수 (테스트용)"""
     import numpy as np
     if len(prices) < period:
         return 50

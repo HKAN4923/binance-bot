@@ -51,9 +51,9 @@ class StrategyEMACross:
         rsi = df["rsi"].iloc[-1]
         price = df["close"].iloc[-1]
 
-        if ema_9 > ema_21 and rsi >= 48:
+        if ema_9 > ema_21 and rsi >= 52:
             side = "LONG"
-        elif ema_9 < ema_21 and rsi <= 52:
+        elif ema_9 < ema_21 and rsi <= 48:
             side = "SHORT"
         else:
             return None
