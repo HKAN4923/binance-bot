@@ -33,3 +33,11 @@ def get_symbol_precision(symbol: str) -> dict:
             return _symbol_precision_cache[symbol]
 
     return {"step_size": 0.001, "tick_size": 0.01}  # 기본값
+
+def get_futures_balance() -> float:
+    """바이낸스 선물 계정의 USDT 잔고 반환"""
+    balances = client.futures_account_balance()
+    for asset in balances:
+        if asset["asset"] == "USDT":
+            return float(asset["balance"])
+    return 0.0
