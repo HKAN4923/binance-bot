@@ -8,22 +8,18 @@ import position_manager
 import trade_summary
 import utils
 from binance_client import client
-from risk_config import TP_SL_SETTINGS, USE_MARKET_TP_SL, USE_MARKET_TP_SL_BACKUP, TP_SL_SLIPPAGE_RATE, LEVERAGE
+from risk_config import USE_MARKET_TP_SL, USE_MARKET_TP_SL_BACKUP, TP_SL_SLIPPAGE_RATE, LEVERAGE, TIME_CUT_BY_STRATEGY, TP_SL_SETTINGS
 
 POSITIONS_TO_MONITOR: List[Dict[str, Any]] = []
-
 
 def get_current_price(symbol: str) -> float:
     ticker = client.futures_symbol_ticker(symbol=symbol)
     return float(ticker["price"])
 
-
 def place_entry_order(symbol: str, side: str, strategy_name: str) -> Dict[str, Any]:
     try:
-        # ✅ 레버리지 설정
         client.futures_change_leverage(symbol=symbol, leverage=LEVERAGE)
 
-        # ✅ 현재가, 잔고, 수량 계산
         entry_price = get_current_price(symbol)
         balance = utils.get_futures_balance()
         qty = utils.calculate_order_quantity(symbol, entry_price, balance)
@@ -51,11 +47,8 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> Dict[str, A
         }
 
         logging.info(f"[진입] {strategy_name} 전략으로 {symbol} {side} 진입 완료 (수량: {qty}, 체결가: {filled_price})")
-
-        # ✅ 텔레그램 알림
         telegram_bot.send_message(f"📥 진입 | 전략: {strategy_name} | 심볼: {symbol} | 방향: {side} | 가격: {filled_price:.4f}")
 
-        # ✅ TP/SL 설정
         if not USE_MARKET_TP_SL:
             success = place_tp_sl_orders(symbol, side, filled_price, qty, strategy_name)
             if not success and USE_MARKET_TP_SL_BACKUP:
@@ -72,21 +65,17 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> Dict[str, A
         logging.error(f"[오류] 진입 주문 실패: {e}")
         return {}
 
-
 def place_tp_sl_orders(symbol: str, side: str, entry_price: float, qty: float, strategy: str) -> bool:
     try:
-        # 전략별 TP/SL 비율 설정 가져오기 (없으면 기본값)
         slippage_config = TP_SL_SETTINGS.get(strategy.upper(), {"tp": 0.02, "sl": 0.02})
         tp_rate = slippage_config["tp"]
         sl_rate = slippage_config["sl"]
 
-        # 가격 계산
         tp_price = utils.apply_slippage(entry_price, side, tp_rate)
         sl_price = utils.apply_slippage(entry_price, side, -sl_rate)
 
         side_tp = "SELL" if side.upper() == "LONG" else "BUY"
 
-        # TP 주문
         client.futures_create_order(
             symbol=symbol,
             side=side_tp,
@@ -96,7 +85,6 @@ def place_tp_sl_orders(symbol: str, side: str, entry_price: float, qty: float, s
             timeInForce="GTC"
         )
 
-        # SL 주문
         client.futures_create_order(
             symbol=symbol,
             side=side_tp,
@@ -113,7 +101,6 @@ def place_tp_sl_orders(symbol: str, side: str, entry_price: float, qty: float, s
         logging.error(f"[오류] TP/SL 지정가 주문 실패: {e}")
         return False
 
-
 def monitor_positions(strategies) -> None:
     now = datetime.utcnow()
     closed = []
@@ -125,8 +112,11 @@ def monitor_positions(strategies) -> None:
             entry_time = datetime.fromisoformat(pos["entry_time"])
             elapsed = now - entry_time
 
-            tp = utils.apply_slippage(pos["entry_price"], pos["side"])
-            sl = utils.apply_slippage(pos["entry_price"], pos["side"])
+            strategy = pos["strategy"]
+            cut_minutes = TIME_CUT_BY_STRATEGY.get(strategy.upper(), 120)
+
+            tp = utils.apply_slippage(pos["entry_price"], pos["side"], 0.02)
+            sl = utils.apply_slippage(pos["entry_price"], pos["side"], -0.02)
 
             if pos["side"] == "LONG":
                 if current_price >= tp or current_price <= sl:
@@ -141,13 +131,12 @@ def monitor_positions(strategies) -> None:
                     closed.append(pos)
                     continue
 
-            if elapsed > timedelta(minutes=120):
+            if elapsed > timedelta(minutes=cut_minutes):
                 pos["pnl"] = (current_price - pos["entry_price"]) * pos["qty"] if pos["side"] == "LONG" else (pos["entry_price"] - current_price) * pos["qty"]
-                logging.warning(f"[타임컷] {symbol} 2시간 초과로 청산")
+                logging.warning(f"[타임컷] {symbol} {cut_minutes}분 초과로 청산")
                 closed.append(pos)
                 continue
 
-            # ✅ 신호 무효화 체크
             for strat in strategies:
                 if hasattr(strat, "name") and strat.name == pos["strategy"]:
                     if hasattr(strat, "check_exit"):
@@ -178,7 +167,6 @@ def monitor_positions(strategies) -> None:
                         logging.info(f"[유령정리] {sym} TP/SL 주문 자동취소")
     except Exception as e:
         logging.warning(f"[유령 정리 실패] {e}")
-
 
 def force_market_exit(position: Dict[str, Any]) -> None:
     try:

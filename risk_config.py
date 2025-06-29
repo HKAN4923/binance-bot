@@ -33,3 +33,10 @@ TP_SL_SETTINGS = {
     "HOLY_GRAIL": {"tp": 0.012, "sl": 0.008},
 }
 
+# 전략별 Time Cut 설정 (단위: 분)
+TIME_CUT_BY_STRATEGY = {
+    "ORB": 120,
+    "NR7": 120,
+    "EMA": 60,
+    "HOLY_GRAIL": 45,
+}
