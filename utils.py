@@ -3,6 +3,7 @@
  - 실시간 잔고 기준 수량 계산
  - 슬리피지 반영 가격 계산 추가
 """
+import logging
 
 from decimal import Decimal, ROUND_DOWN
 from binance_client import get_symbol_precision, client
