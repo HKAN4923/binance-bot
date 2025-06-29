@@ -94,5 +94,5 @@ def clear_json_files():
             path.write_text("[]")
 
 if __name__ == "__main__":
-    clear_json_files()
+
     main_loop()
