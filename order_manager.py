@@ -96,7 +96,8 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
             quantity=quantity
         )
 
-        fill_price = float(order['fills'][0]['price'])
+        # ✅ 수정된 체결가 추출 방식
+        fill_price = float(order.get("avgFillPrice") or order.get("avgPrice") or entry_price)
 
         logging.info(f"[진입] {strategy_name} 전략으로 {symbol} {side} 진입 완료 (수량: {quantity}, 체결가: {fill_price})")
         send_message(f"[진입] {strategy_name} 전략으로 {symbol} {side} 진입 완료 (수량: {quantity}, 체결가: {fill_price})")
