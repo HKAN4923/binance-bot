@@ -6,7 +6,7 @@
 
 from decimal import Decimal, ROUND_DOWN
 from binance_client import get_symbol_precision, client
-from risk_config import CAPITAL_USAGE, LEVERAGE, SLIPPAGE
+from risk_config import CAPITAL_USAGE, LEVERAGE, TP_SL_SLIPPAGE_RATE as SLIPPAGE
 
 MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT 기준)
 
