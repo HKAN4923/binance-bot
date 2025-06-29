@@ -64,6 +64,12 @@ def place_tp_sl_orders(symbol: str, side: str, entry_price: float, quantity: flo
 
 def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
     try:
+        # ✅ 전략에서 온 side가 "LONG"/"SHORT"일 경우 "BUY"/"SELL"로 변환
+        if side.upper() == "LONG":
+            side = "BUY"
+        elif side.upper() == "SHORT":
+            side = "SELL"
+
         entry_price = get_current_price(symbol)
         if entry_price == 0:
             logging.warning(f"[스킵] {symbol} 진입 실패 - 현재가 조회 실패")
@@ -82,7 +88,7 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
 
         order = client.futures_create_order(
             symbol=symbol,
-            side=side.upper(),
+            side=side,  # ✅ 여기서는 이제 "BUY"/"SELL" 확정
             type="MARKET",
             quantity=quantity
         )
