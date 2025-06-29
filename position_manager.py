@@ -85,7 +85,6 @@ def start_order_cleanup_loop(symbol_list: List[str]):
                 for symbol in symbol_list:
                     if symbol not in open_symbols:
                         cancel_all_orders(symbol)
-                        logging.info(f"[주문정리] 포지션 없는 {symbol} 주문 정리 완료")
             except Exception as e:
                 logging.error(f"[오류] 주문 정리 루프 실패: {e}")
             time.sleep(10)
