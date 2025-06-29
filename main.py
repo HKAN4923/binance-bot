@@ -76,6 +76,11 @@ def main_loop():
                         continue
                     if position_manager.is_in_cooldown(signal["symbol"], strat.name):
                         continue
+                    side = signal["side"].upper()
+                    if side == "LONG":
+                        side = "BUY"
+                    elif side == "SHORT":
+                         side = "SELL"
                     order_manager.place_entry_order(
                         signal["symbol"], signal["side"], strat.name
                     )
