@@ -21,7 +21,7 @@ from trade_summary import start_daily_file_sender
 start_daily_file_sender()
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # ✅ 변경: DEBUG 레벨로 설정
     format="%(asctime)s | %(levelname)s | %(message)s",
     handlers=[
         logging.FileHandler("logs/main.log"),
@@ -76,7 +76,7 @@ def main_loop():
                             signal["symbol"], signal["side"], strat.name
                         )
 
-            order_manager.monitor_positions(strategies)  # ✅ 인자 추가됨
+            order_manager.monitor_positions(strategies)
             print_analysis_status_loop()
             time.sleep(5)
 
@@ -84,15 +84,5 @@ def main_loop():
             logging.error(f"[오류] 메인 루프 중단됨: {e}")
             time.sleep(10)
 
-import json
-from pathlib import Path
-
-def clear_json_files():
-    for filename in ["trades.json", "positions.json"]:
-        path = Path(filename)
-        if path.exists():
-            path.write_text("[]")
-
 if __name__ == "__main__":
-
     main_loop()
