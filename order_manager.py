@@ -1,11 +1,10 @@
 import logging
 import math
 from datetime import datetime, timedelta
-
 from binance.exceptions import BinanceAPIException
 from binance_client import client
-from risk_config import LEVERAGE, TIME_CUT_BY_STRATEGY
-from utils import get_current_price, calculate_order_quantity
+from risk_config import LEVERAGE, TIME_CUT_BY_STRATEGY, USE_MARKET_TP_SL, USE_MARKET_TP_SL_BACKUP, TAKE_PROFIT_PCT, STOP_LOSS_PCT
+from utils import calculate_order_quantity, round_price
 from telegram_bot import send_message
 from position_manager import (
     save_position,
@@ -17,10 +16,15 @@ from position_manager import (
     load_positions
 )
 
-def place_tp_sl_orders(symbol: str, side: str, entry_price: float, quantity: float):
-    from risk_config import USE_MARKET_TP_SL, USE_MARKET_TP_SL_BACKUP, TAKE_PROFIT_PCT, STOP_LOSS_PCT
-    from utils import round_price
+def get_current_price(symbol: str) -> float:
+    try:
+        ticker = client.futures_ticker_price(symbol=symbol)
+        return float(ticker['price'])
+    except Exception as e:
+        logging.error(f"[오류] 현재가 조회 실패: {e}")
+        return 0.0
 
+def place_tp_sl_orders(symbol: str, side: str, entry_price: float, quantity: float):
     try:
         tp_price = entry_price * (1 + TAKE_PROFIT_PCT) if side == "BUY" else entry_price * (1 - TAKE_PROFIT_PCT)
         sl_price = entry_price * (1 - STOP_LOSS_PCT) if side == "BUY" else entry_price * (1 + STOP_LOSS_PCT)
@@ -194,6 +198,5 @@ def close_position(symbol: str, side: str) -> None:
 
     except BinanceAPIException as e:
         logging.error(f"[오류] {symbol} 청산 실패(Binance): {e}")
-    
     except Exception as e:
-        logging.error(...) 
+        logging.error(f"[오류] {symbol} 청산 실패: {e}")

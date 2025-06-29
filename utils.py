@@ -72,3 +72,4 @@ def calculate_rsi(prices: list, period: int = 14) -> float:
     down = -seed[seed < 0].sum() / period
     rs = up / down if down != 0 else 0
     return 100 - 100 / (1 + rs)
+
