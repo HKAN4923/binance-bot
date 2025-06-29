@@ -4,6 +4,8 @@
  - 심볼별 쿨타임 30분 적용
  - 빈도 기준 50~60회/일 수준을 목표로 수치 설정
 """
+# 👇 이 줄을 맨 위나 다른 import 아래 추가
+import random
 
 import datetime
 import pandas as pd
@@ -49,8 +51,8 @@ class StrategyHolyGrail:
 
             # ✅ 반전 조건: 최근 1캔들 양봉/음봉 여부 (약한 되돌림)
             last = df.iloc[-1]
-            pullback = abs(last["close"] - last["open"]) < 0.008 * last["close"]  # ← 조정폭 (빈도↑/↓)
-            near_ema = abs(last["close"] - last["ema20"]) / last["ema20"] < 0.012  # ← EMA 근접범위 (완화할수록 빈도↑)
+            pullback = abs(last["close"] - last["open"]) < 0.006 * last["close"]  # ← 조정폭 (빈도↑/↓)
+            near_ema = abs(last["close"] - last["ema20"]) / last["ema20"] < 0.008  # ← EMA 근접범위 (완화할수록 빈도↑)
 
             # ✅ 진입 조건
             if trend == "up" and last["close"] > last["open"] and pullback and near_ema:

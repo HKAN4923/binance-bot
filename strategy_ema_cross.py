@@ -53,9 +53,9 @@ class StrategyEMACross:
         rsi = df["rsi"].iloc[-1]
         price = df["close"].iloc[-1]
 
-        if ema_9 > ema_21 and rsi >= 53:
+        if ema_9 > ema_21 and rsi >= 55:
             side = "LONG"
-        elif ema_9 < ema_21 and rsi <= 47:
+        elif ema_9 < ema_21 and rsi <= 45:
             side = "SHORT"
         else:
             return None
@@ -76,8 +76,8 @@ def check_exit(self, symbol: str, entry_side: str) -> bool:
     ema_21 = 24.0
     rsi = random.randint(40, 60)
 
-    if entry_side == "LONG" and ema_9 < ema_21 and rsi < 47:
+    if entry_side == "LONG" and ema_9 < ema_21 and rsi < 45:
         return True
-    if entry_side == "SHORT" and ema_9 > ema_21 and rsi > 53:
+    if entry_side == "SHORT" and ema_9 > ema_21 and rsi > 55:
         return True
     return False
