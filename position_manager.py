@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
 from binance_client import client
-from order_manager import cancel_all_orders  # ✅ 새로 import
+from utils import cancel_all_orders  # ✅ 새로 import
 
 from risk_config import MAX_POSITIONS, COOLDOWN_MINUTES
 

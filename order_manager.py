@@ -4,7 +4,7 @@ from binance.exceptions import BinanceAPIException
 
 from binance_client import client
 from risk_config import LEVERAGE, TIME_CUT_BY_STRATEGY, TP_SL_SETTINGS
-from utils import calculate_order_quantity, round_price
+from utils import calculate_order_quantity, round_price,  cancel_all_orders
 from telegram_bot import send_message
 from position_manager import (
     add_position,
@@ -218,10 +218,3 @@ def get_position_info(symbol: str) -> dict:
         logging.error(f"[오류] {symbol} 포지션 조회 실패: {e}")
     return {"positionAmt": "0"}
 
-def cancel_all_orders(symbol: str) -> None:
-    """지정된 심볼의 모든 미체결 주문 취소"""
-    try:
-        client.futures_cancel_all_open_orders(symbol=symbol)
-        logging.info(f"[정리] {symbol} 미체결 주문 전부 취소 완료")
-    except Exception as e:
-        logging.error(f"[오류] {symbol} 주문 정리 실패: {e}")
