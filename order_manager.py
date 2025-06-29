@@ -1,9 +1,9 @@
 import logging
-import math
 from datetime import datetime, timedelta
 from binance.exceptions import BinanceAPIException
+
 from binance_client import client
-from risk_config import LEVERAGE, TIME_CUT_BY_STRATEGY, USE_MARKET_TP_SL, USE_MARKET_TP_SL_BACKUP, TAKE_PROFIT_PCT, STOP_LOSS_PCT
+from risk_config import LEVERAGE, TIME_CUT_BY_STRATEGY, TP_SL_SETTINGS
 from utils import calculate_order_quantity, round_price
 from telegram_bot import send_message
 from position_manager import (
@@ -24,54 +24,38 @@ def get_current_price(symbol: str) -> float:
         logging.error(f"[오류] 현재가 조회 실패: {e}")
         return 0.0
 
-def place_tp_sl_orders(symbol: str, side: str, entry_price: float, quantity: float):
+def place_tp_sl_orders(symbol: str, side: str, entry_price: float, quantity: float, strategy_name: str):
     try:
-        tp_price = entry_price * (1 + TAKE_PROFIT_PCT) if side == "BUY" else entry_price * (1 - TAKE_PROFIT_PCT)
-        sl_price = entry_price * (1 - STOP_LOSS_PCT) if side == "BUY" else entry_price * (1 + STOP_LOSS_PCT)
+        settings = TP_SL_SETTINGS.get(strategy_name.upper(), {"tp": 0.02, "sl": 0.01})
+        tp_pct = settings["tp"]
+        sl_pct = settings["sl"]
+
+        tp_price = entry_price * (1 + tp_pct) if side.upper() == "BUY" else entry_price * (1 - tp_pct)
+        sl_price = entry_price * (1 - sl_pct) if side.upper() == "BUY" else entry_price * (1 + sl_pct)
 
         tp_price = round_price(symbol, tp_price)
         sl_price = round_price(symbol, sl_price)
         exit_side = "SELL" if side.upper() == "BUY" else "BUY"
 
-        if USE_MARKET_TP_SL:
-            client.futures_create_order(
-                symbol=symbol,
-                side=exit_side,
-                type="TAKE_PROFIT_MARKET",
-                stopPrice=tp_price,
-                closePosition=True,
-                timeInForce="GTE_GTC"
-            )
-            client.futures_create_order(
-                symbol=symbol,
-                side=exit_side,
-                type="STOP_MARKET",
-                stopPrice=sl_price,
-                closePosition=True,
-                timeInForce="GTE_GTC"
-            )
-            return True, True
-
-        else:
-            client.futures_create_order(
-                symbol=symbol,
-                side=exit_side,
-                type="LIMIT",
-                price=tp_price,
-                quantity=quantity,
-                timeInForce="GTC",
-                reduceOnly=True
-            )
-            client.futures_create_order(
-                symbol=symbol,
-                side=exit_side,
-                type="STOP_MARKET",
-                stopPrice=sl_price,
-                quantity=quantity,
-                timeInForce="GTE_GTC",
-                reduceOnly=True
-            )
-            return True, True
+        client.futures_create_order(
+            symbol=symbol,
+            side=exit_side,
+            type="LIMIT",
+            price=tp_price,
+            quantity=quantity,
+            timeInForce="GTC",
+            reduceOnly=True
+        )
+        client.futures_create_order(
+            symbol=symbol,
+            side=exit_side,
+            type="STOP_MARKET",
+            stopPrice=sl_price,
+            quantity=quantity,
+            timeInForce="GTE_GTC",
+            reduceOnly=True
+        )
+        return True, True
 
     except BinanceAPIException as e:
         logging.error(f"[오류] TP/SL 지정가 주문 실패: {e}")
@@ -110,8 +94,10 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
         logging.info(f"[진입] {strategy_name} 전략으로 {symbol} {side} 진입 완료 (수량: {quantity}, 체결가: {fill_price})")
         send_message(f"[진입] {strategy_name} 전략으로 {symbol} {side} 진입 완료 (수량: {quantity}, 체결가: {fill_price})")
 
-        tp_ordered, sl_ordered = place_tp_sl_orders(symbol, side, fill_price, quantity)
+        # TP/SL 주문 시도
+        place_tp_sl_orders(symbol, side, fill_price, quantity, strategy_name)
 
+        # ✅ 무조건 감시 등록
         position_data = {
             "symbol": symbol,
             "strategy": strategy_name,
@@ -121,10 +107,6 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
         }
         save_position(position_data)
         POSITIONS_TO_MONITOR.append(position_data)
-
-        if not tp_ordered or not sl_ordered:
-            logging.warning(f"[백업] 지정가 TP/SL 실패 → {symbol} 감시 목록 등록됨")
-            send_message(f"[백업] TP/SL 실패 → {symbol} 감시 중 (조건반전/타임컷 감시)")
 
     except BinanceAPIException as e:
         logging.error(f"[오류] 진입 주문 실패(Binance): {e}")
