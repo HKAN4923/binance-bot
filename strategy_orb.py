@@ -55,10 +55,10 @@ class StrategyORB:
             low = opening_range["low"].min()
             last = rest.iloc[-1]
 
-            if last["close"] > high * 1.002:
+            if last["close"] > high * 1.0015:
                 entry = last["close"]
                 side = "LONG"
-            elif last["close"] < low * 0.998:
+            elif last["close"] < low * 0.9985:
                 entry = last["close"]
                 side = "SHORT"
             else:

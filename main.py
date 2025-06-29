@@ -1,4 +1,7 @@
-"""자동매매 봇 메인 실행 파일"""
+"""자동매매 봇 메인 실행 파일 (라쉬케5 기준)
+ - 활성화 전략: ORB, NR7, EMA, Holy Grail
+ - Pullback 전략 제거됨
+"""
 
 import logging
 import time
@@ -11,7 +14,7 @@ import telegram_bot
 from strategy_orb import StrategyORB
 from strategy_nr7 import StrategyNR7
 from strategy_ema_cross import StrategyEMACross
-from strategy_pullback import StrategyPullback
+from strategy_holy_grail import StrategyHolyGrail
 from risk_config import MAX_POSITIONS
 from trade_summary import start_daily_file_sender
 
@@ -36,9 +39,7 @@ SYMBOL_LIST = [
     "WAVESUSDT", "BCHUSDT", "ZRXUSDT", "MINAUSDT", "LINAUSDT"
 ]
 
-
 def load_enabled_strategies():
-    """활성화된 전략 목록 반환 (심볼 리스트 포함)"""
     strategies = []
     if config.ORB_ENABLED:
         strategies.append(StrategyORB(SYMBOL_LIST))
@@ -46,24 +47,21 @@ def load_enabled_strategies():
         strategies.append(StrategyNR7(SYMBOL_LIST))
     if config.EMA_ENABLED:
         strategies.append(StrategyEMACross(SYMBOL_LIST))
-    if config.PULLBACK_ENABLED:
-        strategies.append(StrategyPullback(SYMBOL_LIST))
+    if config.HOLY_GRAIL_ENABLED:
+        strategies.append(StrategyHolyGrail(SYMBOL_LIST))
     return strategies
-
 
 def print_analysis_status_loop():
     positions = position_manager.get_positions()
     count = len(positions)
     print(f"📡 실시간 분석중...({count}/{MAX_POSITIONS})")
 
-
 def main_loop():
-    """자동매매 루프 시작"""
     telegram_bot.send_message("🚀 자동매매 봇이 시작되었습니다.")
     strategies = load_enabled_strategies()
     trade_summary.start_summary_scheduler()
 
-    symbol_index = 0  # 순차 탐색용 인덱스
+    symbol_index = 0
 
     while True:
         try:
@@ -85,12 +83,11 @@ def main_loop():
 
             order_manager.monitor_positions()
             print_analysis_status_loop()
-            time.sleep(5)  # 5초마다 순차적으로 하나의 심볼 분석
+            time.sleep(5)
 
         except Exception as e:
             logging.error(f"[오류] 메인 루프 중단됨: {e}")
             time.sleep(10)
-
 
 if __name__ == "__main__":
     main_loop()

@@ -6,4 +6,4 @@
 ORB_ENABLED = True           # ORB 전략 (Opening Range Breakout)
 NR7_ENABLED = True           # NR7 돌파 전략
 EMA_ENABLED = True           # EMA 교차 + RSI 필터 전략
-PULLBACK_ENABLED = True      # Donchian 기반 Pullback 전략
+HOLY_GRAIL_ENABLED = True

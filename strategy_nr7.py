@@ -1,7 +1,7 @@
-"""NR7 전략 모듈 (라쉬케 기준 적용)
- - 한국/중국/미국장 시작 시간대만 진입 (KST 기준)
- - 하루 동일 심볼 최대 3회 진입 허용
- - NR7 조건 충족 시 진입
+"""NR7 전략 모듈 (라쉬케 기준 개선형)
+ - 최근 7봉 중 가장 좁은 범위 대신, 평균 대비 좁은 봉으로 완화
+ - 한국/중국/미국 장 시작 시간대에만 진입
+ - 동일 심볼 하루 최대 3회 진입
 """
 
 import datetime
@@ -18,14 +18,11 @@ class StrategyNR7:
         self.entry_counter = {}  # {symbol: {날짜: 진입횟수}}
 
     def get_active_block(self) -> bool:
-        """현재 시각이 전략 허용 시간대인지 확인"""
         now_kst = to_kst(datetime.datetime.utcnow())
         current = now_kst.time()
-
         kor_block = datetime.time(9, 0) <= current <= datetime.time(10, 0)
         chn_block = datetime.time(10, 0) <= current <= datetime.time(11, 0)
         usa_block = datetime.time(21, 0) <= current <= datetime.time(22, 0)
-
         return kor_block or chn_block or usa_block
 
     def check_entry(self, symbol: str):
@@ -48,8 +45,9 @@ class StrategyNR7:
             df["low"] = df["low"].astype(float)
             df["range"] = df["high"] - df["low"]
 
-            # 최근 7개 중 마지막 봉이 가장 작은 range를 가졌는지 확인 (NR7)
-            if df["range"].iloc[-1] < df["range"].iloc[:-1].min():
+            # ✅ NR7 완화 조건: 최근 1봉이 평균보다 25% 이상 좁은 봉이면 진입
+            avg_range = df["range"].iloc[:-1].mean()
+            if df["range"].iloc[-1] < avg_range * 0.75:
                 side = "LONG" if df["close"].iloc[-1] > df["open"].iloc[-1] else "SHORT"
                 price = float(df["close"].iloc[-1])
 
