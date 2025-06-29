@@ -10,7 +10,7 @@ CAPITAL_USAGE = 0.2
 LEVERAGE = 5
 
 # 포지션 유지 최대 시간 (단위: 분) → 초과 시 강제 청산
-TIME_CUT_MINUTES = 120
+TIME_CUT_MINUTES = 120  
 
 # ORB, NR7 전략을 위한 예약 슬롯 수
 RESERVED_SLOTS = 0
