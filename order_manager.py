@@ -10,7 +10,6 @@ from position_manager import (
     add_position,
     remove_position,
     get_positions,
-    get_position_info,
     cancel_all_orders
 )
 
@@ -209,3 +208,13 @@ def close_position(symbol: str, side: str) -> None:
         logging.error(f"[오류] {symbol} 청산 실패(Binance): {e}")
     except Exception as e:
         logging.error(f"[오류] {symbol} 청산 실패: {e}")
+
+def get_position_info(symbol: str) -> dict:
+    """심볼별 포지션 정보 조회"""
+    try:
+        positions = client.futures_position_information(symbol=symbol)
+        if positions:
+            return positions[0]
+    except Exception as e:
+        logging.error(f"[오류] {symbol} 포지션 조회 실패: {e}")
+    return {"positionAmt": "0"}
