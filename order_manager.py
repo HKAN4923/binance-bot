@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from binance.exceptions import BinanceAPIException
 from binance_client import client
 from risk_config import LEVERAGE, TIME_CUT_BY_STRATEGY
-from utils import get_current_price, calculate_order_quantity, place_tp_sl_orders
+from utils import get_current_price, calculate_order_quantity
 from telegram_bot import send_message
 from position_manager import (
     save_position,
@@ -16,6 +16,65 @@ from position_manager import (
     POSITIONS_TO_MONITOR,
     load_positions
 )
+
+def place_tp_sl_orders(symbol: str, side: str, entry_price: float, quantity: float):
+    from risk_config import USE_MARKET_TP_SL, USE_MARKET_TP_SL_BACKUP, TAKE_PROFIT_PCT, STOP_LOSS_PCT
+    from utils import round_price
+
+    try:
+        tp_price = entry_price * (1 + TAKE_PROFIT_PCT) if side == "BUY" else entry_price * (1 - TAKE_PROFIT_PCT)
+        sl_price = entry_price * (1 - STOP_LOSS_PCT) if side == "BUY" else entry_price * (1 + STOP_LOSS_PCT)
+
+        tp_price = round_price(symbol, tp_price)
+        sl_price = round_price(symbol, sl_price)
+        exit_side = "SELL" if side.upper() == "BUY" else "BUY"
+
+        if USE_MARKET_TP_SL:
+            client.futures_create_order(
+                symbol=symbol,
+                side=exit_side,
+                type="TAKE_PROFIT_MARKET",
+                stopPrice=tp_price,
+                closePosition=True,
+                timeInForce="GTE_GTC"
+            )
+            client.futures_create_order(
+                symbol=symbol,
+                side=exit_side,
+                type="STOP_MARKET",
+                stopPrice=sl_price,
+                closePosition=True,
+                timeInForce="GTE_GTC"
+            )
+            return True, True
+
+        else:
+            client.futures_create_order(
+                symbol=symbol,
+                side=exit_side,
+                type="LIMIT",
+                price=tp_price,
+                quantity=quantity,
+                timeInForce="GTC",
+                reduceOnly=True
+            )
+            client.futures_create_order(
+                symbol=symbol,
+                side=exit_side,
+                type="STOP_MARKET",
+                stopPrice=sl_price,
+                quantity=quantity,
+                timeInForce="GTE_GTC",
+                reduceOnly=True
+            )
+            return True, True
+
+    except BinanceAPIException as e:
+        logging.error(f"[오류] TP/SL 지정가 주문 실패: {e}")
+        return False, False
+    except Exception as e:
+        logging.error(f"[오류] TP/SL 주문 실패: {e}")
+        return False, False
 
 def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
     try:
@@ -92,7 +151,6 @@ def monitor_positions(strategies) -> None:
             logging.warning(f"[경고] 감시 중 전략 {strat_name} 없음")
             continue
 
-        # 전략별 타임컷 시간 적용
         cut_minutes = TIME_CUT_BY_STRATEGY.get(strat_name.upper(), 120)
         elapsed = now - entry_time
         if elapsed > timedelta(minutes=cut_minutes):
@@ -101,7 +159,6 @@ def monitor_positions(strategies) -> None:
             closed.append(pos)
             continue
 
-        # 조건 반전 여부 확인
         try:
             if hasattr(strat, "check_exit") and strat.check_exit(symbol, entry_price, side):
                 logging.warning(f"[신호 무효화] {symbol} → 조건 반전으로 청산")
@@ -137,5 +194,6 @@ def close_position(symbol: str, side: str) -> None:
 
     except BinanceAPIException as e:
         logging.error(f"[오류] {symbol} 청산 실패(Binance): {e}")
+    
     except Exception as e:
-        logging.error(f"[오류] {symbol} 청산 실패: {e}")
+        logging.error(...) 
