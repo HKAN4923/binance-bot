@@ -5,16 +5,16 @@ import logging
 
 price_cache = {}  # 실시간 가격 저장 딕셔너리
 
-
 def _on_message(ws, message):
     try:
-        data = json.loads(message)
+        outer = json.loads(message)
+        data = outer.get("data", {})  # ✅ 진짜 데이터는 여기 있음
         symbol = data.get("s")
         price_str = data.get("c")
         if symbol and price_str:
             price_cache[symbol] = float(price_str)
         else:
-            logging.warning(f"[WebSocket 경고] 유효하지 않은 데이터 수신: {data}")
+            logging.warning(f"[WebSocket 경고] 유효하지 않은 데이터 수신: {outer}")
     except Exception as e:
         logging.error(f"[WebSocket 오류] 메시지 처리 실패: {e}")
 
