@@ -10,13 +10,22 @@
 import logging
 from decimal import Decimal, ROUND_DOWN
 from datetime import timedelta
+import requests
 
 from binance_client import get_symbol_precision, client
 from risk_config import CAPITAL_USAGE, LEVERAGE, TP_SL_SLIPPAGE_RATE as SLIPPAGE
 
 MIN_NOTIONAL = 5.0  # USDT 기준 최소 주문 금액
 
-
+def get_candles(symbol: str, interval: str = "5m", limit: int = 100):
+    """바이낸스 캔들 조회"""
+    try:
+        klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
+        return klines
+    except Exception as e:
+        print(f"[utils] 캔들 조회 오류: {e}")
+        return []
+    
 def get_futures_balance() -> float:
     try:
         balances = client.futures_account_balance()
