@@ -4,15 +4,15 @@ from binance.exceptions import BinanceAPIException
 
 from binance_client import client
 from risk_config import LEVERAGE, TIME_CUT_BY_STRATEGY, TP_SL_SETTINGS
-from utils import calculate_order_quantity, round_price,  cancel_all_orders
+from utils import calculate_order_quantity, round_price, get_futures_balance, cancel_all_orders
 from telegram_bot import send_message
 from position_manager import (
     add_position,
     remove_position,
-    get_positions
+    get_positions,
+    is_duplicate,
+    is_in_cooldown
 )
-
-POSITIONS_TO_MONITOR = []
 
 def get_current_price(symbol: str) -> float:
     try:
@@ -64,18 +64,12 @@ def place_tp_sl_orders(symbol: str, side: str, entry_price: float, quantity: flo
 
 def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
     try:
-        # ✅ 전략에서 온 side가 "LONG"/"SHORT"일 경우 "BUY"/"SELL"로 변환
-        if side.upper() == "LONG":
-            side = "BUY"
-        elif side.upper() == "SHORT":
-            side = "SELL"
-
         entry_price = get_current_price(symbol)
         if entry_price == 0:
             logging.warning(f"[스킵] {symbol} 진입 실패 - 현재가 조회 실패")
             return
 
-        balance = float(client.futures_account_balance()[0]['balance'])
+        balance = get_futures_balance()
         quantity = calculate_order_quantity(symbol, entry_price, balance)
 
         if quantity == 0:
@@ -88,7 +82,7 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
 
         order = client.futures_create_order(
             symbol=symbol,
-            side=side,  # ✅ 여기서는 이제 "BUY"/"SELL" 확정
+            side=side.upper(),
             type="MARKET",
             quantity=quantity
         )
@@ -107,8 +101,7 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
             "entry_price": fill_price,
             "entry_time": datetime.utcnow().isoformat()
         }
-        add_position(position_data)
-        POSITIONS_TO_MONITOR.append(position_data)
+        add_position(position_data)  # 기록용 저장만
 
     except BinanceAPIException as e:
         logging.error(f"[오류] 진입 주문 실패(Binance): {e}")
@@ -117,82 +110,73 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
 
 def monitor_positions(strategies) -> None:
     now = datetime.utcnow()
+    current_positions = get_positions()
 
-    if POSITIONS_TO_MONITOR:
-        logging.info(f"[감시중] 현재 감시 중인 포지션 수: {len(POSITIONS_TO_MONITOR)}")
-        for p in POSITIONS_TO_MONITOR:
-            logging.info(f"[감시포지션] {p['symbol']} | 전략: {p['strategy']} | 방향: {p['side']} | 진입가: {p['entry_price']}")
+    if current_positions:
+        logging.info(f"[감시중] 현재 감시 중인 포지션 수: {len(current_positions)}")
+        for p in current_positions:
+            logging.info(f"[감시포지션] {p['symbol']} | 수량: {p['positionAmt']} | 진입가: {p['entryPrice']}")
     else:
         logging.info("[감시중] 현재 감시 중인 포지션 없음")
 
-    closed = []
-    for pos in POSITIONS_TO_MONITOR:
+    for pos in current_positions:
         symbol = pos["symbol"]
-        strat_name = pos["strategy"]
-        entry_price = pos["entry_price"]
-        side = pos["side"]
-        entry_time = datetime.fromisoformat(pos["entry_time"])
+        entry_price = float(pos["entryPrice"])
+        side = "BUY" if float(pos["positionAmt"]) > 0 else "SELL"
+        strategy_name = None
 
-        try:
-            strat = next(s for s in strategies if s.name == strat_name)
-        except StopIteration:
-            logging.warning(f"[경고] 감시 중 전략 {strat_name} 없음")
+        # 전략 이름 매칭 (positions.json에서 찾아야 함)
+        for record in get_positions_from_log():
+            if record["symbol"] == symbol and record["side"].upper() == side.upper():
+                strategy_name = record["strategy"]
+                entry_time = datetime.fromisoformat(record["entry_time"])
+                break
+        else:
+            logging.warning(f"[스킵] {symbol} 전략 정보 없음")
             continue
 
-        cut_minutes = TIME_CUT_BY_STRATEGY.get(strat_name.upper(), 120)
+        # 타임컷
+        cut_minutes = TIME_CUT_BY_STRATEGY.get(strategy_name.upper(), 120)
         elapsed = now - entry_time
         if elapsed > timedelta(minutes=cut_minutes):
             logging.warning(f"[타임컷] {symbol} {cut_minutes}분 초과로 청산")
             close_position(symbol, side)
-            closed.append(pos)
+            remove_position({"symbol": symbol, "strategy": strategy_name})
             continue
 
-        settings = TP_SL_SETTINGS.get(strat_name.upper(), {"tp": 0.02, "sl": 0.01})
-        tp_pct = settings["tp"]
-        sl_pct = settings["sl"]
-        tp_price = entry_price * (1 + tp_pct) if side.upper() == "BUY" else entry_price * (1 - tp_pct)
-        sl_price = entry_price * (1 - sl_pct) if side.upper() == "BUY" else entry_price * (1 + sl_pct)
+        # TP/SL 조건 확인
+        settings = TP_SL_SETTINGS.get(strategy_name.upper(), {"tp": 0.02, "sl": 0.01})
+        tp_price = entry_price * (1 + settings["tp"]) if side == "BUY" else entry_price * (1 - settings["tp"])
+        sl_price = entry_price * (1 - settings["sl"]) if side == "BUY" else entry_price * (1 + settings["sl"])
 
         current_price = get_current_price(symbol)
 
-        if side.upper() == "BUY" and current_price >= tp_price:
+        if side == "BUY" and current_price >= tp_price:
             logging.warning(f"[익절청산] {symbol} 현재가 {current_price:.4f} >= TP {tp_price:.4f}")
             close_position(symbol, side)
-            closed.append(pos)
-            continue
-        elif side.upper() == "BUY" and current_price <= sl_price:
+            remove_position({"symbol": symbol, "strategy": strategy_name})
+        elif side == "BUY" and current_price <= sl_price:
             logging.warning(f"[손절청산] {symbol} 현재가 {current_price:.4f} <= SL {sl_price:.4f}")
             close_position(symbol, side)
-            closed.append(pos)
-            continue
-        elif side.upper() == "SELL" and current_price <= tp_price:
+            remove_position({"symbol": symbol, "strategy": strategy_name})
+        elif side == "SELL" and current_price <= tp_price:
             logging.warning(f"[익절청산] {symbol} 현재가 {current_price:.4f} <= TP {tp_price:.4f}")
             close_position(symbol, side)
-            closed.append(pos)
-            continue
-        elif side.upper() == "SELL" and current_price >= sl_price:
+            remove_position({"symbol": symbol, "strategy": strategy_name})
+        elif side == "SELL" and current_price >= sl_price:
             logging.warning(f"[손절청산] {symbol} 현재가 {current_price:.4f} >= SL {sl_price:.4f}")
             close_position(symbol, side)
-            closed.append(pos)
-            continue
+            remove_position({"symbol": symbol, "strategy": strategy_name})
 
-        try:
-            if hasattr(strat, "check_exit") and strat.check_exit(symbol, entry_price, side):
-                logging.warning(f"[신호 무효화] {symbol} → 조건 반전으로 청산")
-                close_position(symbol, side)
-                closed.append(pos)
-        except Exception as e:
-            logging.error(f"[오류] {symbol} 조건 확인 중 오류: {e}")
-
-    for c in closed:
-        remove_position(c["symbol"], c["strategy"])
-        POSITIONS_TO_MONITOR.remove(c)
+def get_positions_from_log():
+    """positions.json에서 기록된 포지션 불러오기 (전략 확인용)"""
+    from position_manager import load_positions
+    return load_positions()
 
 def close_position(symbol: str, side: str) -> None:
     try:
         opposite = "SELL" if side.upper() == "BUY" else "BUY"
-
-        pos_info = get_position_info(symbol)
+        pos_info = client.futures_position_information(symbol=symbol)[0]
         qty = abs(float(pos_info["positionAmt"]))
         if qty == 0:
             logging.info(f"[청산 스킵] {symbol} 포지션 없음 → 주문 정리만 진행")
@@ -213,14 +197,3 @@ def close_position(symbol: str, side: str) -> None:
         logging.error(f"[오류] {symbol} 청산 실패(Binance): {e}")
     except Exception as e:
         logging.error(f"[오류] {symbol} 청산 실패: {e}")
-
-def get_position_info(symbol: str) -> dict:
-    """심볼별 포지션 정보 조회"""
-    try:
-        positions = client.futures_position_information(symbol=symbol)
-        if positions:
-            return positions[0]
-    except Exception as e:
-        logging.error(f"[오류] {symbol} 포지션 조회 실패: {e}")
-    return {"positionAmt": "0"}
-

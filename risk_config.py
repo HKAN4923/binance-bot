@@ -1,10 +1,10 @@
 """리스크 설정 파일"""
 
 # 최대 동시 포지션 수
-MAX_POSITIONS = 3
+MAX_POSITIONS = 4
 
 # 포지션당 자산 사용 비율 (ex: 0.2 = 전체 자산의 20%)
-CAPITAL_USAGE = 0.3
+CAPITAL_USAGE = 0.25
 
 # 레버리지 (1~125 범위)
 LEVERAGE = 5
