@@ -8,7 +8,7 @@ from decimal import Decimal, ROUND_DOWN
 from binance_client import get_symbol_precision, client
 from risk_config import CAPITAL_USAGE, LEVERAGE, TP_SL_SLIPPAGE_RATE as SLIPPAGE
 
-MIN_NOTIONAL = 5.0  # 기본 최소 주문 금액 (USDT 기준)
+MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT 기준)
 
 def get_futures_balance() -> float:
     balances = client.futures_account_balance()
@@ -19,7 +19,11 @@ def get_futures_balance() -> float:
 
 def round_quantity(symbol: str, qty: float) -> float:
     step_size = get_symbol_precision(symbol)["step_size"]
-    return float(Decimal(str(qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
+    rounded_qty = float(Decimal(str(qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
+    # Binance는 step_size 미만 수량은 허용 안 함 → 0으로 처리
+    if rounded_qty < step_size:
+        return 0.0
+    return rounded_qty
 
 def round_price(symbol: str, price: float) -> float:
     tick_size = get_symbol_precision(symbol)["tick_size"]
@@ -28,18 +32,17 @@ def round_price(symbol: str, price: float) -> float:
 def calculate_order_quantity(symbol: str, entry_price: float, balance: float) -> float:
     """
     잔고, 진입 가격, 설정값 기준으로 수량 계산
-    - step_size 절삭 포함
-    - 최소 notional(5 USDT) 미만이면 0 반환
+    - 최소 수량 제한
+    - 최소 주문 금액 제한 (레버리지 미포함 기준)
+    - step_size 절삭
     """
     try:
         precision = get_symbol_precision(symbol)
-        step_size = precision["step_size"]
-
         capital = balance * CAPITAL_USAGE
         raw_qty = (capital * LEVERAGE) / entry_price
         quantity = round_quantity(symbol, raw_qty)
 
-        notional = quantity * entry_price
+        notional = quantity * entry_price  # Binance는 레버리지 포함 안 함
         if quantity <= 0:
             logging.warning(f"[경고] 수량이 0입니다: {symbol}")
             return 0.0
@@ -76,7 +79,7 @@ def calculate_rsi(prices: list, period: int = 14) -> float:
     return 100 - 100 / (1 + rs)
 
 def cancel_all_orders(symbol: str) -> None:
-    """지정된 심볼의 모든 미체결 주문 취소 (로그는 출력 안 함)"""
+    """지정된 심볼의 모든 미체결 주문 취소 (조용히 처리)"""
     try:
         client.futures_cancel_all_open_orders(symbol=symbol)
     except Exception as e:
