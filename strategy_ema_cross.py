@@ -47,20 +47,22 @@ class StrategyEMACross:
             curr_ema21 = ema21[-1]
 
             if prev_ema9 < prev_ema21 and curr_ema9 > curr_ema21:
+                logging.debug(f"[EMA] {symbol} → 골든크로스 진입 시도 (RSI: {latest_rsi})")
                 if USE_RSI_FILTER and latest_rsi < RSI_LONG_MIN:
-                    logging.debug(f"[EMA] {symbol} → RSI {latest_rsi:.1f} < {RSI_LONG_MIN} (롱 제한)")
+                    logging.debug(f"[EMA] {symbol} → RSI {latest_rsi:.1f} < {RSI_LONG_MIN} (long 제한)")
                     return None
                 logging.info(f"[EMA] {symbol} → 골든크로스 (long)")
                 return {"symbol": symbol, "side": "LONG"}
 
             if prev_ema9 > prev_ema21 and curr_ema9 < curr_ema21:
+                logging.debug(f"[EMA] {symbol} → 데드크로스 진입 시도 (RSI: {latest_rsi})")
                 if USE_RSI_FILTER and latest_rsi > RSI_SHORT_MAX:
-                    logging.debug(f"[EMA] {symbol} → RSI {latest_rsi:.1f} > {RSI_SHORT_MAX} (숏 제한)")
+                    logging.debug(f"[EMA] {symbol} → RSI {latest_rsi:.1f} > {RSI_SHORT_MAX} (short 제한)")
                     return None
                 logging.info(f"[EMA] {symbol} → 데드크로스 (short)")
                 return {"symbol": symbol, "side": "SHORT"}
 
-            logging.debug(f"[EMA] {symbol} → 조건 미충족")
+            logging.debug(f"[EMA] {symbol} → 크로스 없음")
             return None
 
         except Exception as e:
