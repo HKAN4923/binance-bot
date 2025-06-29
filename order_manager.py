@@ -8,7 +8,7 @@ import position_manager
 import trade_summary
 import utils
 from binance_client import client
-from risk_config import USE_MARKET_TP_SL, USE_MARKET_TP_SL_BACKUP, TP_SL_SLIPPAGE_RATE, LEVERAGE
+from risk_config import TP_SL_SETTINGS, USE_MARKET_TP_SL, USE_MARKET_TP_SL_BACKUP, TP_SL_SLIPPAGE_RATE, LEVERAGE
 
 POSITIONS_TO_MONITOR: List[Dict[str, Any]] = []
 
@@ -57,7 +57,7 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> Dict[str, A
 
         # ✅ TP/SL 설정
         if not USE_MARKET_TP_SL:
-            success = place_tp_sl_orders(symbol, side, filled_price, qty)
+            success = place_tp_sl_orders(symbol, side, filled_price, qty, strategy_name)
             if not success and USE_MARKET_TP_SL_BACKUP:
                 POSITIONS_TO_MONITOR.append(position)
                 logging.warning(f"[백업] 지정가 TP/SL 실패 → {symbol} 감시 목록 등록됨")
@@ -73,13 +73,20 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> Dict[str, A
         return {}
 
 
-def place_tp_sl_orders(symbol: str, side: str, entry_price: float, qty: float) -> bool:
+def place_tp_sl_orders(symbol: str, side: str, entry_price: float, qty: float, strategy: str) -> bool:
     try:
-        tp_price = utils.apply_slippage(entry_price, side)
-        sl_price = utils.apply_slippage(entry_price, side)
+        # 전략별 TP/SL 비율 설정 가져오기 (없으면 기본값)
+        slippage_config = TP_SL_SETTINGS.get(strategy.upper(), {"tp": 0.02, "sl": 0.02})
+        tp_rate = slippage_config["tp"]
+        sl_rate = slippage_config["sl"]
+
+        # 가격 계산
+        tp_price = utils.apply_slippage(entry_price, side, tp_rate)
+        sl_price = utils.apply_slippage(entry_price, side, -sl_rate)
 
         side_tp = "SELL" if side.upper() == "LONG" else "BUY"
 
+        # TP 주문
         client.futures_create_order(
             symbol=symbol,
             side=side_tp,
@@ -89,6 +96,7 @@ def place_tp_sl_orders(symbol: str, side: str, entry_price: float, qty: float) -
             timeInForce="GTC"
         )
 
+        # SL 주문
         client.futures_create_order(
             symbol=symbol,
             side=side_tp,
@@ -98,7 +106,7 @@ def place_tp_sl_orders(symbol: str, side: str, entry_price: float, qty: float) -
             timeInForce="GTC"
         )
 
-        logging.info(f"[TP/SL 설정] {symbol} TP: {tp_price:.2f}, SL: {sl_price:.2f}")
+        logging.info(f"[TP/SL 설정] {symbol} | 전략: {strategy} | TP: {tp_price:.2f}, SL: {sl_price:.2f}")
         return True
 
     except Exception as e:

@@ -52,12 +52,11 @@ def calculate_order_quantity(symbol: str, entry_price: float, balance: float) ->
         return 0.0
 
 
-def apply_slippage(price: float, side: str) -> float:
-    """진입/청산 가격에 슬리피지를 적용한 가격 반환"""
-    if side == "LONG":
-        return round(price * (1 + SLIPPAGE), 4)
-    elif side == "SHORT":
-        return round(price * (1 - SLIPPAGE), 4)
+def apply_slippage(price: float, side: str, rate: float) -> float:
+    if side.upper() == "LONG":
+        return round(price * (1 + rate), 4)
+    elif side.upper() == "SHORT":
+        return round(price * (1 - rate), 4)
     return round(price, 4)
 
 def to_kst(dt):
