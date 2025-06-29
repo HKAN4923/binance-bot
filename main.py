@@ -70,7 +70,7 @@ def main_loop():
         except Exception as e:
             logging.error(f"[메인 루프 오류] {e}")
 
-        time.sleep(5)
+
 
 if __name__ == "__main__":
     main_loop()
