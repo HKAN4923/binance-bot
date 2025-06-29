@@ -60,6 +60,12 @@ def place_tp_sl_orders(symbol: str, side: str, entry_price: float, quantity: flo
         return False, False
 
 def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
+    side = side.upper()
+    if side == "LONG":
+        side = "BUY"
+    elif side == "SHORT":
+         side = "SELL"
+    
     try:
         side = side.upper()
         if side not in ["BUY", "SELL"]:
