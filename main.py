@@ -49,7 +49,7 @@ def load_enabled_strategies():
     return strategies
 
 def print_analysis_status_loop():
-    positions = get_positions()  # ✅ 실시간 포지션 기준
+    positions = get_positions()
     count = len(positions)
     print(f"\U0001f4e1 실시간 분석중...({count}/{MAX_POSITIONS})")
 
@@ -59,29 +59,34 @@ def main_loop():
     start_order_cleanup_loop(SYMBOL_LIST)
     trade_summary.start_summary_scheduler()
 
+    symbol_index = 0
+
     while True:
         try:
+            symbol = SYMBOL_LIST[symbol_index % len(SYMBOL_LIST)]
+
             for strat in strategies:
-                for symbol in SYMBOL_LIST:
-                    if not position_manager.can_enter(strat.name):
+                if not position_manager.can_enter(strat.name):
+                    continue
+                signal = strat.check_entry(symbol)
+                if signal:
+                    if position_manager.is_duplicate(signal["symbol"], strat.name):
                         continue
-                    signal = strat.check_entry(symbol)
-                    if signal:
-                        if position_manager.is_duplicate(signal["symbol"], strat.name):
-                            continue
-                        if position_manager.is_in_cooldown(signal["symbol"], strat.name):
-                            continue
-                        order_manager.place_entry_order(
-                            signal["symbol"], signal["side"], strat.name
-                        )
+                    if position_manager.is_in_cooldown(signal["symbol"], strat.name):
+                        continue
+                    order_manager.place_entry_order(
+                        signal["symbol"], signal["side"], strat.name
+                    )
 
             order_manager.monitor_positions(strategies)
             print_analysis_status_loop()
-            time.sleep(5)
+
+            time.sleep(2)  # ✅ 2초에 1심볼씩 분석
+            symbol_index += 1
 
         except Exception as e:
             logging.error(f"[오류] 메인 루프 중단됨: {e}")
-            time.sleep(10)
+            time.sleep(5)
 
 if __name__ == "__main__":
     main_loop()
