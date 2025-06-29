@@ -92,3 +92,6 @@ def start_order_cleanup_loop(symbol_list: List[str]):
 
     t = threading.Thread(target=loop, daemon=True)
     t.start()
+
+def load_positions() -> List[Dict[str, Any]]:
+    return _load_positions()
