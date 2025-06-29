@@ -83,7 +83,7 @@ def main_loop():
             order_manager.monitor_positions(strategies)
             print_analysis_status_loop()
 
-            time.sleep(1)  # ✅ 2초에 1심볼씩 분석
+            time.sleep(0.5)  # ✅ 2초에 1심볼씩 분석
             symbol_index += 1
 
         except Exception as e:
