@@ -4,7 +4,7 @@ from binance.exceptions import BinanceAPIException
 from price_ws import get_price
 from binance_client import client
 from risk_config import LEVERAGE, TIME_CUT_BY_STRATEGY, TP_SL_SETTINGS
-from utils import calculate_order_quantity, round_price, get_futures_balance, cancel_all_orders, apply_slippage
+from utils import calculate_order_quantity, round_price, round_quantity, get_futures_balance, cancel_all_orders
 from telegram_bot import send_message
 from position_manager import (
     add_position,
@@ -15,13 +15,9 @@ from position_manager import (
     load_positions as get_positions_from_log
 )
 
+
 def get_current_price(symbol: str) -> float:
-    try:
-        ticker = client.futures_symbol_ticker(symbol=symbol)
-        return float(ticker['price'])
-    except Exception as e:
-        logging.error(f"[오류] 현재가 조회 실패: {e}")
-        return 0.0
+    return get_price(symbol)
 
 def place_tp_sl_orders(symbol: str, side: str, entry_price: float, quantity: float, strategy_name: str):
     try:
@@ -65,13 +61,19 @@ def place_tp_sl_orders(symbol: str, side: str, entry_price: float, quantity: flo
 
 def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
     try:
-        entry_price = get_current_price(symbol)
+        side = side.upper()
+        if side not in ["BUY", "SELL"]:
+            logging.warning(f"[스킵] {symbol} 진입 실패 - 잘못된 side 값: {side}")
+            return
+
+        entry_price = round_price(symbol, client.futures_symbol_ticker(symbol=symbol)['price'])
         if entry_price == 0:
             logging.warning(f"[스킵] {symbol} 진입 실패 - 현재가 조회 실패")
             return
 
         balance = get_futures_balance()
         quantity = calculate_order_quantity(symbol, entry_price, balance)
+        quantity = round_quantity(symbol, quantity)
 
         if quantity == 0:
             logging.warning(f"[스킵] {symbol} 진입 실패 - 수량 계산 실패")
@@ -83,7 +85,7 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
 
         order = client.futures_create_order(
             symbol=symbol,
-            side=side.upper(),
+            side=side,
             type="MARKET",
             quantity=quantity
         )
@@ -108,6 +110,7 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
         logging.error(f"[오류] 진입 주문 실패(Binance): {e}")
     except Exception as e:
         logging.error(f"[오류] 진입 주문 실패: {e}")
+
 
 def monitor_positions(strategies) -> None:
     now = datetime.utcnow()
