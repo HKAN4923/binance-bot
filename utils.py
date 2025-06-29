@@ -77,6 +77,6 @@ def cancel_all_orders(symbol: str) -> None:
     """지정된 심볼의 모든 미체결 주문 취소"""
     try:
         client.futures_cancel_all_open_orders(symbol=symbol)
-        logging.info(f"[정리] {symbol} 미체결 주문 전부 취소 완료")
+
     except Exception as e:
         logging.error(f"[오류] {symbol} 주문 정리 실패: {e}")
