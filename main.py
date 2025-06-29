@@ -8,7 +8,7 @@ from strategy_holy_grail import StrategyHolyGrail
 
 from order_manager import place_entry_order, monitor_positions
 from position_manager import can_enter, is_duplicate, is_in_cooldown
-from price_ws import start_price_websocket
+from price_ws import  start_price_ws
 
 # 로그 설정
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -32,7 +32,7 @@ strategies = [
 ]
 
 def main_loop():
-    start_price_websocket()
+    start_price_ws(SYMBOL_LIST)
     logging.info("[WebSocket] 실시간 가격 수신 시작됨")
 
     while True:
