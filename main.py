@@ -7,13 +7,11 @@ from strategy_ema_cross import StrategyEMACross
 from strategy_holy_grail import StrategyHolyGrail
 
 from order_manager import place_entry_order, monitor_positions
-from position_manager import can_enter, is_duplicate, is_in_cooldown
-from price_ws import  start_price_ws
+from position_manager import can_enter, is_duplicate, is_in_cooldown, get_positions
+from price_ws import start_price_ws
 
-# 로그 설정
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-# 감시 대상 심볼 리스트
 SYMBOL_LIST = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT",
     "DOTUSDT", "MATICUSDT", "LTCUSDT", "TRXUSDT", "NEARUSDT", "UNIUSDT", "ATOMUSDT", "ETCUSDT", "ICPUSDT",
@@ -23,7 +21,6 @@ SYMBOL_LIST = [
     "WAVESUSDT", "BCHUSDT", "ZRXUSDT", "MINAUSDT", "LINAUSDT"
 ]
 
-# 전략 인스턴스 생성 (심볼 리스트 전달)
 strategies = [
     StrategyORB(SYMBOL_LIST),
     StrategyNR7(SYMBOL_LIST),
@@ -39,16 +36,23 @@ def main_loop():
         try:
             monitor_positions()
 
+            open_positions = get_positions()
+            logging.info(f"[분석중... ({len(open_positions)}/4)]")
+
             for symbol in SYMBOL_LIST:
                 for strat in strategies:
                     if not can_enter(strat.name):
+                        logging.debug(f"[{strat.name}] {symbol} → 슬롯 초과로 스킵")
                         continue
 
                     signal = strat.check_entry(symbol)
                     if signal:
+                        logging.info(f"[{strat.name}] {symbol} 진입 조건 충족 → {signal['side'].upper()}")
                         if is_duplicate(signal["symbol"], strat.name):
+                            logging.debug(f"[{strat.name}] {symbol} 중복 진입 방지")
                             continue
                         if is_in_cooldown(signal["symbol"], strat.name):
+                            logging.debug(f"[{strat.name}] {symbol} 쿨타임 중으로 스킵")
                             continue
 
                         side = signal["side"].upper()
@@ -58,13 +62,15 @@ def main_loop():
                             side = "SELL"
 
                         place_entry_order(signal["symbol"], side, strat.name)
+                    else:
+                        logging.debug(f"[{strat.name}] {symbol} 조건 미충족")
 
-                time.sleep(0.5)  # 심볼별 전략 분석 간격
+                time.sleep(0.5)  # 전략별 분석 간격
 
         except Exception as e:
             logging.error(f"[메인 루프 오류] {e}")
-        
-        time.sleep(5)  # 루프 반복 대기 시간
+
+        time.sleep(5)
 
 if __name__ == "__main__":
     main_loop()
