@@ -31,7 +31,7 @@ def calculate_order_quantity(symbol: str, entry_price: float, balance: float) ->
     """
     잔고, 진입 가격, 설정값 기준으로 수량 계산
     - 최소 수량 제한
-    - 최소 주문 금액 제한
+    - 최소 주문 금액 제한 (레버리지 포함)
     - step_size 절삭
     """
     try:
@@ -41,7 +41,7 @@ def calculate_order_quantity(symbol: str, entry_price: float, balance: float) ->
         capital = balance * CAPITAL_USAGE
         raw_qty = (capital * LEVERAGE) / entry_price
         quantity = round_quantity(symbol, raw_qty)
-        notional = quantity * entry_price
+        notional = quantity * entry_price * LEVERAGE  # ✅ 레버리지 포함 기준
 
         if quantity <= 0:
             logging.warning(f"[경고] 수량이 0입니다: {symbol} → 계산된 수량이 step_size보다 작음")
@@ -82,6 +82,6 @@ def cancel_all_orders(symbol: str) -> None:
     """지정된 심볼의 모든 미체결 주문 취소"""
     try:
         client.futures_cancel_all_open_orders(symbol=symbol)
-        logging.info(f"[정리] {symbol} 미체결 주문 전부 취소 완료")
+       
     except Exception as e:
         logging.error(f"[오류] {symbol} 주문 정리 실패: {e}")
