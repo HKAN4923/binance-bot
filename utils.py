@@ -1,67 +1,45 @@
-"""전략 공통 유틸 함수 모듈"""
+"""utils.py - 라쉬케5 전략 보조 함수 모음
+ - 정확한 수량/가격 반올림
+ - 심볼별 precision 정보 처리
+ - 실시간 수량 계산 (잔고 기준)
+"""
 
-import math
-from datetime import datetime
-from typing import Iterable
-
-from zoneinfo import ZoneInfo
-
+from decimal import Decimal, ROUND_DOWN
+from binance_client import get_symbol_precision, get_futures_balance
 from risk_config import CAPITAL_USAGE, LEVERAGE
-from binance_client import get_symbol_precision
-
-
-def calculate_order_quantity(symbol: str, price: float, balance: float = 1000) -> float:
-    raw_qty = balance * CAPITAL_USAGE * LEVERAGE / price
-    step_size = get_symbol_precision(symbol)["step_size"]
-    precision = abs(round(-1 * (step_size).as_integer_ratio()[1].bit_length() // 3, 0))  # 소수점 자리 추정
-    qty = round(raw_qty, int(precision))  # 정확한 자리수로 반올림
-    return max(qty, float(step_size))  # 최소 주문 단위 보장
-
-
-def calculate_rsi(prices: Iterable[float], period: int = 14) -> float:
-    """RSI 계산"""
-    prices = list(prices)
-    if len(prices) < period + 1:
-        raise ValueError("RSI 계산을 위한 가격 데이터가 부족합니다")
-
-    gains = []
-    losses = []
-    for i in range(1, period + 1):
-        delta = prices[-i] - prices[-i - 1]
-        if delta >= 0:
-            gains.append(delta)
-        else:
-            losses.append(abs(delta))
-
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period if losses else 0.0
-
-    if avg_loss == 0:
-        return 100.0
-
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-
-def to_kst(dt: datetime) -> datetime:
-    """UTC 기준 datetime을 KST로 변환"""
-    return dt.astimezone(ZoneInfo("Asia/Seoul"))
-
-
-def apply_slippage(price: float, side: str, rate: float) -> float:
-    """슬리피지를 적용한 TP/SL 가격 계산"""
-    if side.upper() == "LONG":
-        return price * (1 + rate)
-    return price * (1 - rate)
-
-
-def round_price(symbol: str, price: float) -> float:
-    """tick size 기준 가격 반올림"""
-    tick_size = get_symbol_precision(symbol)["tick_size"]
-    return math.floor(price / tick_size) * tick_size
-
 
 def round_quantity(symbol: str, qty: float) -> float:
+    """심볼별 수량 반올림 (step_size 기준)"""
     step_size = get_symbol_precision(symbol)["step_size"]
-    precision = abs(round(-1 * (step_size).as_integer_ratio()[1].bit_length() // 3, 0))
-    return max(round(qty, int(precision)), float(step_size))
+    rounded_qty = float(Decimal(str(qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
+    return max(rounded_qty, float(step_size))
+
+def round_price(symbol: str, price: float) -> float:
+    """심볼별 가격 반올림 (tick_size 기준)"""
+    tick_size = get_symbol_precision(symbol)["tick_size"]
+    rounded_price = float(Decimal(str(price)).quantize(Decimal(str(tick_size)), rounding=ROUND_DOWN))
+    return max(rounded_price, float(tick_size))
+
+def calculate_order_quantity(symbol: str, price: float, balance: float = None) -> float:
+    """잔고, 비율, 레버리지 기준으로 수량 계산 후 정확히 반올림"""
+    if balance is None:
+        balance = get_futures_balance()
+    raw_qty = balance * CAPITAL_USAGE * LEVERAGE / price
+    return round_quantity(symbol, raw_qty)
+
+def to_kst(dt):
+    """UTC 시간을 한국 시간으로 변환"""
+    from datetime import timedelta
+    return dt + timedelta(hours=9)
+
+def calculate_rsi(prices: list, period: int = 14) -> float:
+    """RSI 계산 보조 함수 (테스트용)"""
+    import numpy as np
+    if len(prices) < period:
+        return 50
+    deltas = np.diff(prices)
+    seed = deltas[:period]
+    up = seed[seed > 0].sum() / period
+    down = -seed[seed < 0].sum() / period
+    rs = up / down if down != 0 else 0
+    return 100 - 100 / (1 + rs)
