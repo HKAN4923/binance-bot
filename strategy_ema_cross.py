@@ -1,83 +1,94 @@
-"""EMA 교차 + RSI 전략 모듈 (실전 버전)
- - RSI 조건: 55 이상 or 45 이하
- - EMA 9/21 교차 확인
- - 캔들 기반 실시간 계산
-"""
-# 👇 이 줄을 맨 위나 다른 import 아래 추가
-import random
+import logging
+from datetime import datetime, timedelta
+from price_ws import get_price
+from utils import get_candles, calculate_ema, calculate_rsi
 
-import datetime
-import pandas as pd
-from utils import to_kst, calculate_rsi
-from binance_client import client
-
+# --------------------------------------
+# ✅ 진입 조건 조절 파라미터 (라쉬케5 전략 기준)
+# 승률 조정, 진입 민감도 조정 시 아래 값만 바꾸면 됨
+# --------------------------------------
+USE_RSI_FILTER = True       # RSI 필터를 사용할지 여부
+RSI_LONG_MIN = 50           # 롱 진입 최소 RSI 기준 (ex. 55 → 보수적)
+RSI_SHORT_MAX = 50          # 숏 진입 최대 RSI 기준 (ex. 45 → 보수적)
 
 class StrategyEMACross:
-    name = "EMA"
+    def __init__(self, symbols):
+        self.name = "EMA"
+        self.symbols = symbols
 
-    def __init__(self, symbol_list):
-        self.symbol_list = symbol_list
-        self.last_entry_time = {}
-
-    def is_in_cooldown(self, symbol: str) -> bool:
-        now = datetime.datetime.utcnow()
-        last = self.last_entry_time.get(symbol)
-        if last is None:
-            return False
-        return (now - last).total_seconds() < 1800  # 30분
-
-    def check_entry(self, symbol: str):
-        if self.is_in_cooldown(symbol):
-            return None
-
-        # 캔들 데이터 불러오기
+    def check_entry(self, symbol):
         try:
-            klines = client.futures_klines(symbol=symbol, interval="15m", limit=50)
-            df = pd.DataFrame(klines, columns=[
-                "time", "open", "high", "low", "close", "volume",
-                "_", "_", "_", "_", "_", "_"
-            ])
-            df["close"] = df["close"].astype(float)
+            candles = get_candles(symbol, interval="5m", limit=50)
+            if len(candles) < 21:
+                logging.debug(f"[EMA] {symbol} → 캔들 부족")
+                return None
+
+            closes = [float(c[4]) for c in candles]
+            ema9 = calculate_ema(closes, 9)
+            ema21 = calculate_ema(closes, 21)
+
+            if ema9 is None or ema21 is None:
+                logging.debug(f"[EMA] {symbol} → EMA 계산 실패")
+                return None
+
+            # ✅ RSI 필터 적용
+            if USE_RSI_FILTER:
+                rsi = calculate_rsi(closes, 14)
+                if rsi is None or len(rsi) == 0:
+                    logging.debug(f"[EMA] {symbol} → RSI 계산 실패")
+                    return None
+                latest_rsi = rsi[-1]
+            else:
+                latest_rsi = None
+
+            prev_ema9 = ema9[-2]
+            prev_ema21 = ema21[-2]
+            curr_ema9 = ema9[-1]
+            curr_ema21 = ema21[-1]
+
+            if prev_ema9 < prev_ema21 and curr_ema9 > curr_ema21:
+                if USE_RSI_FILTER and latest_rsi < RSI_LONG_MIN:
+                    logging.debug(f"[EMA] {symbol} → RSI {latest_rsi:.1f} < {RSI_LONG_MIN} (롱 제한)")
+                    return None
+                logging.info(f"[EMA] {symbol} → 골든크로스 (long)")
+                return {"symbol": symbol, "side": "LONG"}
+
+            if prev_ema9 > prev_ema21 and curr_ema9 < curr_ema21:
+                if USE_RSI_FILTER and latest_rsi > RSI_SHORT_MAX:
+                    logging.debug(f"[EMA] {symbol} → RSI {latest_rsi:.1f} > {RSI_SHORT_MAX} (숏 제한)")
+                    return None
+                logging.info(f"[EMA] {symbol} → 데드크로스 (short)")
+                return {"symbol": symbol, "side": "SHORT"}
+
+            logging.debug(f"[EMA] {symbol} → 조건 미충족")
+            return None
+
         except Exception as e:
-            print(f"[에러] {symbol} 캔들 데이터 불러오기 실패: {e}")
+            logging.error(f"[EMA] {symbol} 진입 오류: {e}")
             return None
 
-        # EMA & RSI 계산
-        df["ema_9"] = df["close"].ewm(span=9, adjust=False).mean()
-        df["ema_21"] = df["close"].ewm(span=21, adjust=False).mean()
-        df["rsi"] = calculate_rsi(df["close"], 14)
+    def check_exit(self, symbol, entry_side):
+        try:
+            candles = get_candles(symbol, interval="5m", limit=50)
+            if len(candles) < 21:
+                return False
 
-        # 최근 캔들 기준으로 판단
-        ema_9 = df["ema_9"].iloc[-1]
-        ema_21 = df["ema_21"].iloc[-1]
-        rsi = df["rsi"].iloc[-1]
-        price = df["close"].iloc[-1]
+            closes = [float(c[4]) for c in candles]
+            ema9 = calculate_ema(closes, 9)
+            ema21 = calculate_ema(closes, 21)
 
-        if ema_9 > ema_21 and rsi >= 55:
-            side = "LONG"
-        elif ema_9 < ema_21 and rsi <= 45:
-            side = "SHORT"
-        else:
-            return None
+            if ema9 is None or ema21 is None:
+                return False
 
-        self.last_entry_time[symbol] = datetime.datetime.utcnow()
-        return {
-            "symbol": symbol,
-            "side": side,
-            "entry_price": round(price, 4),
-        }
+            curr_ema9 = ema9[-1]
+            curr_ema21 = ema21[-1]
 
-def check_exit(self, symbol: str, entry_side: str) -> bool:
-    """
-    신호 무효화: 진입 조건이 더 이상 유지되지 않고,
-    반대방향 조건까지 충족되었을 때 강제 청산
-    """
-    ema_9 = 25.0  # 예시
-    ema_21 = 24.0
-    rsi = random.randint(40, 60)
+            if entry_side == "LONG" and curr_ema9 < curr_ema21:
+                return True
+            if entry_side == "SHORT" and curr_ema9 > curr_ema21:
+                return True
+            return False
 
-    if entry_side == "LONG" and ema_9 < ema_21 and rsi < 45:
-        return True
-    if entry_side == "SHORT" and ema_9 > ema_21 and rsi > 55:
-        return True
-    return False
+        except Exception as e:
+            logging.error(f"[EMA] {symbol} 청산 오류: {e}")
+            return False

@@ -1,86 +1,69 @@
-"""Holy Grail 스타일 Pullback 전략 (라쉬케 기반)
- - EMA20 기준 추세 후 되돌림 발생 시 진입
- - EMA 부근에서 반전 캔들 발생 시 진입
- - 심볼별 쿨타임 30분 적용
- - 빈도 기준 50~60회/일 수준을 목표로 수치 설정
-"""
-# 👇 이 줄을 맨 위나 다른 import 아래 추가
-import random
-
-import datetime
-import pandas as pd
-from binance_client import client
-
+import logging
+from datetime import datetime, timedelta
+from price_ws import get_price
+from utils import get_candles, calculate_ema
 
 class StrategyHolyGrail:
-    name = "HOLY_GRAIL"
+    def __init__(self, symbols):
+        self.name = "HOLY_GRAIL"
+        self.symbols = symbols
 
-    def __init__(self, symbol_list):
-        self.symbol_list = symbol_list
-        self.last_entry_time = {}  # {symbol: datetime}
-
-    def is_in_cooldown(self, symbol: str) -> bool:
-        now = datetime.datetime.utcnow()
-        last = self.last_entry_time.get(symbol)
-        if last is None:
-            return False
-        return (now - last).total_seconds() < 1800  # 30분
-
-    def check_entry(self, symbol: str):
-        if self.is_in_cooldown(symbol):
-            return None
-
+    def check_entry(self, symbol):
         try:
-            klines = client.futures_klines(symbol=symbol, interval="15m", limit=30)
-            df = pd.DataFrame(klines, columns=[
-                "time", "open", "high", "low", "close", "volume",
-                "_", "_", "_", "_", "_", "_"
-            ])
-            df["close"] = df["close"].astype(float)
-            df["open"] = df["open"].astype(float)
-            df["low"] = df["low"].astype(float)
-            df["high"] = df["high"].astype(float)
-
-            df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
-
-            # ✅ 추세 판단: 최근 5개 캔들 평균이 EMA보다 높거나 낮은가?
-            recent = df.iloc[-6:-1]
-            mean_close = recent["close"].mean()
-            mean_ema = recent["ema20"].mean()
-            trend = "up" if mean_close > mean_ema else "down"
-
-            # ✅ 반전 조건: 최근 1캔들 양봉/음봉 여부 (약한 되돌림)
-            last = df.iloc[-1]
-            pullback = abs(last["close"] - last["open"]) < 0.006 * last["close"]  # ← 조정폭 (빈도↑/↓)
-            near_ema = abs(last["close"] - last["ema20"]) / last["ema20"] < 0.008  # ← EMA 근접범위 (완화할수록 빈도↑)
-
-            # ✅ 진입 조건
-            if trend == "up" and last["close"] > last["open"] and pullback and near_ema:
-                side = "LONG"
-            elif trend == "down" and last["close"] < last["open"] and pullback and near_ema:
-                side = "SHORT"
-            else:
+            candles = get_candles(symbol, interval="5m", limit=50)
+            if len(candles) < 30:
+                logging.debug(f"[HOLY] {symbol} → 캔들 부족")
                 return None
 
-            self.last_entry_time[symbol] = datetime.datetime.utcnow()
-            return {
-                "symbol": symbol,
-                "side": side,
-                "entry_price": round(last["close"], 4),
-            }
+            closes = [float(c[4]) for c in candles]
+            lows = [float(c[3]) for c in candles]
+            highs = [float(c[2]) for c in candles]
 
-        except Exception as e:
-            print(f"[HolyGrail 오류] {symbol} 데이터 오류: {e}")
+            ema20 = calculate_ema(closes, 20)
+            if ema20 is None:
+                return None
+
+            current_price = get_price(symbol)
+            if current_price is None:
+                logging.debug(f"[HOLY] {symbol} → 현재가 없음")
+                return None
+
+            near_ema = abs(current_price - ema20[-1]) / ema20[-1] < 0.012  # ✅ 유지
+            pullback_range = (max(highs[-5:-1]) - min(lows[-5:-1])) / closes[-1]
+            pullback_ok = pullback_range > 0.008  # ✅ 유지
+
+            if near_ema and pullback_ok:
+                if closes[-2] < ema20[-2] and closes[-1] > ema20[-1]:
+                    logging.info(f"[HOLY] {symbol} → 반등 인식 (long)")
+                    return {"symbol": symbol, "side": "LONG"}
+                elif closes[-2] > ema20[-2] and closes[-1] < ema20[-1]:
+                    logging.info(f"[HOLY] {symbol} → 반락 인식 (short)")
+                    return {"symbol": symbol, "side": "SHORT"}
+
+            logging.debug(f"[HOLY] {symbol} → 조건 미충족 (pullback_ok={pullback_ok}, near_ema={near_ema})")
             return None
 
-def check_exit(self, symbol: str, entry_side: str) -> bool:
-    """신호 무효화: 반대 방향으로 강한 트렌드 발생 시 청산"""
-    ma_20 = 30.0
-    price = 28.0
-    strong_trend = random.random() < 0.5
+        except Exception as e:
+            logging.error(f"[HOLY] {symbol} 진입 오류: {e}")
+            return None
 
-    if entry_side == "LONG" and price < ma_20 and strong_trend:
-        return True
-    if entry_side == "SHORT" and price > ma_20 and strong_trend:
-        return True
-    return False
+    def check_exit(self, symbol, entry_side):
+        try:
+            candles = get_candles(symbol, interval="5m", limit=30)
+            if len(candles) < 2:
+                return False
+
+            closes = [float(c[4]) for c in candles]
+            ema20 = calculate_ema(closes, 20)
+            if ema20 is None:
+                return False
+
+            if entry_side == "LONG" and closes[-1] < ema20[-1]:
+                return True
+            if entry_side == "SHORT" and closes[-1] > ema20[-1]:
+                return True
+            return False
+
+        except Exception as e:
+            logging.error(f"[HOLY] {symbol} 청산 오류: {e}")
+            return False
