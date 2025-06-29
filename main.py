@@ -1,5 +1,3 @@
-
-
 import logging
 import time
 
@@ -8,14 +6,15 @@ import order_manager
 import position_manager
 import trade_summary
 import telegram_bot
+
 from strategy_orb import StrategyORB
 from strategy_nr7 import StrategyNR7
 from strategy_ema_cross import StrategyEMACross
 from strategy_holy_grail import StrategyHolyGrail
+
 from risk_config import MAX_POSITIONS
 from trade_summary import start_daily_file_sender
-from position_manager import load_positions, start_order_cleanup_loop
-from order_manager import POSITIONS_TO_MONITOR
+from position_manager import get_positions, start_order_cleanup_loop
 
 start_daily_file_sender()
 
@@ -50,20 +49,15 @@ def load_enabled_strategies():
     return strategies
 
 def print_analysis_status_loop():
-    positions = position_manager.get_positions()
+    positions = get_positions()  # ✅ 실시간 포지션 기준
     count = len(positions)
-    print(f"📡 실시간 분석중...({count}/{MAX_POSITIONS})")
+    print(f"\U0001f4e1 실시간 분석중...({count}/{MAX_POSITIONS})")
 
 def main_loop():
-    telegram_bot.send_message("🚀 자동매매 봇이 시작되었습니다.")
+    telegram_bot.send_message("\U0001f680 자동매매 봇이 시작되었습니다.")
     strategies = load_enabled_strategies()
-    start_order_cleanup_loop(SYMBOL_LIST)  # ✅ 심볼 리스트 넘김
+    start_order_cleanup_loop(SYMBOL_LIST)
     trade_summary.start_summary_scheduler()
-
-    # ✅ 포지션 감시 복원
-    for pos in load_positions():
-        POSITIONS_TO_MONITOR.append(pos)
-        logging.info(f"[복원] {pos['symbol']} 전략 {pos['strategy']} 감시 복원 완료")
 
     while True:
         try:
@@ -90,7 +84,4 @@ def main_loop():
             time.sleep(10)
 
 if __name__ == "__main__":
-    
     main_loop()
-
-
