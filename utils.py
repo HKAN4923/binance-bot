@@ -8,7 +8,7 @@ from decimal import Decimal, ROUND_DOWN
 from binance_client import get_symbol_precision, client
 from risk_config import CAPITAL_USAGE, LEVERAGE, TP_SL_SLIPPAGE_RATE as SLIPPAGE
 
-MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT 기준)
+MIN_NOTIONAL = 5.0  # 기본 최소 주문 금액 (USDT 기준)
 
 def get_futures_balance() -> float:
     balances = client.futures_account_balance()
@@ -19,20 +19,17 @@ def get_futures_balance() -> float:
 
 def round_quantity(symbol: str, qty: float) -> float:
     step_size = get_symbol_precision(symbol)["step_size"]
-    rounded_qty = float(Decimal(str(qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
-    return max(rounded_qty, float(step_size))
+    return float(Decimal(str(qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
 
 def round_price(symbol: str, price: float) -> float:
     tick_size = get_symbol_precision(symbol)["tick_size"]
-    rounded_price = float(Decimal(str(price)).quantize(Decimal(str(tick_size)), rounding=ROUND_DOWN))
-    return max(rounded_price, float(tick_size))
+    return float(Decimal(str(price)).quantize(Decimal(str(tick_size)), rounding=ROUND_DOWN))
 
 def calculate_order_quantity(symbol: str, entry_price: float, balance: float) -> float:
     """
     잔고, 진입 가격, 설정값 기준으로 수량 계산
-    - 최소 수량 제한
-    - 최소 주문 금액 제한 (레버리지 포함)
-    - step_size 절삭
+    - step_size 절삭 포함
+    - 최소 notional(5 USDT) 미만이면 0 반환
     """
     try:
         precision = get_symbol_precision(symbol)
@@ -41,26 +38,26 @@ def calculate_order_quantity(symbol: str, entry_price: float, balance: float) ->
         capital = balance * CAPITAL_USAGE
         raw_qty = (capital * LEVERAGE) / entry_price
         quantity = round_quantity(symbol, raw_qty)
-        notional = quantity * entry_price * LEVERAGE  # ✅ 레버리지 포함 기준
 
+        notional = quantity * entry_price
         if quantity <= 0:
-            logging.warning(f"[경고] 수량이 0입니다: {symbol} → 계산된 수량이 step_size보다 작음")
+            logging.warning(f"[경고] 수량이 0입니다: {symbol}")
             return 0.0
         if notional < MIN_NOTIONAL:
             logging.warning(f"[경고] {symbol} 주문 금액 {notional:.4f} USDT < 최소 {MIN_NOTIONAL} USDT")
             return 0.0
 
         return quantity
-
     except Exception as e:
         logging.error(f"[오류] 수량 계산 실패: {e}")
         return 0.0
 
-def apply_slippage(price: float, side: str, rate: float) -> float:
+def apply_slippage(price: float, side: str) -> float:
+    """진입/청산 가격에 슬리피지를 적용한 가격 반환"""
     if side.upper() == "LONG":
-        return round(price * (1 + rate), 4)
+        return round(price * (1 + SLIPPAGE), 4)
     elif side.upper() == "SHORT":
-        return round(price * (1 - rate), 4)
+        return round(price * (1 - SLIPPAGE), 4)
     return round(price, 4)
 
 def to_kst(dt):
@@ -79,9 +76,8 @@ def calculate_rsi(prices: list, period: int = 14) -> float:
     return 100 - 100 / (1 + rs)
 
 def cancel_all_orders(symbol: str) -> None:
-    """지정된 심볼의 모든 미체결 주문 취소"""
+    """지정된 심볼의 모든 미체결 주문 취소 (로그는 출력 안 함)"""
     try:
         client.futures_cancel_all_open_orders(symbol=symbol)
-       
     except Exception as e:
         logging.error(f"[오류] {symbol} 주문 정리 실패: {e}")
