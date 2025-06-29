@@ -49,8 +49,10 @@ def round_price(symbol: str, price: float) -> float:
 
 
 def calculate_order_quantity(symbol: str, entry_price: float, balance: float) -> float:
-    """진입 가격, 잔고 기준 수량 계산 (정밀도 반영, 최소금액 검증 포함)"""
     try:
+        precision = get_symbol_precision(symbol)
+        step_size = precision["step_size"]
+
         capital = balance * CAPITAL_USAGE
         raw_qty = (capital * LEVERAGE) / entry_price
         quantity = round_quantity(symbol, raw_qty)
@@ -59,17 +61,28 @@ def calculate_order_quantity(symbol: str, entry_price: float, balance: float) ->
         logging.debug(f"[디버그] {symbol} 수량 계산 → 잔고: {balance:.2f}, 사용금액: {capital:.2f}, "
                       f"진입가: {entry_price:.4f}, raw_qty: {raw_qty:.6f}, 절삭수량: {quantity}, notional: {notional:.4f}")
 
-        if quantity <= 0:
-            logging.warning(f"[경고] {symbol} 수량이 0입니다")
-            return 0.0
-        if notional < MIN_NOTIONAL:
-            logging.warning(f"[경고] {symbol} 주문 금액 {notional:.4f} USDT < 최소 {MIN_NOTIONAL} USDT")
+        # ✅ 최소 수량보다 작으면 실패
+        if quantity < step_size:
+            logging.warning(f"[경고] {symbol} 수량 {quantity} < 최소 단위 {step_size}")
             return 0.0
 
+        # ✅ 최소 금액 미만 시 → 한 단계 올려서 재시도
+        if notional < MIN_NOTIONAL:
+            adjusted_qty = round_quantity(symbol, quantity + step_size)
+            adjusted_notional = adjusted_qty * entry_price
+            if adjusted_notional >= MIN_NOTIONAL:
+                logging.info(f"[보정] {symbol} 수량 보정: {quantity} → {adjusted_qty}")
+                return adjusted_qty
+            else:
+                logging.warning(f"[경고] {symbol} 주문 금액 {notional:.4f} USDT < 최소 {MIN_NOTIONAL} USDT")
+                return 0.0
+
         return quantity
+
     except Exception as e:
         logging.error(f"[오류] {symbol} 수량 계산 실패: {e}")
         return 0.0
+
 
 
 def apply_slippage(price: float, side: str) -> float:
