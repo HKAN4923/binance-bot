@@ -1,140 +1,103 @@
-"""utils.py - 라쉬케5 전략 보조 유틸리티
- - 실시간 잔고 조회
- - 수량/가격 정밀도 반올림
- - 최소 수량/주문금액 보정
- - 슬리피지 계산 (정밀도 포함)
- - RSI 계산
- - 시간 변환
- - 주문 정리
-"""
+import math
 import logging
-from decimal import Decimal, ROUND_DOWN
-from datetime import timedelta
-import requests
+import numpy as np
+from binance_client import client
 
-from binance_client import get_symbol_precision, client
-from risk_config import CAPITAL_USAGE, LEVERAGE, TP_SL_SLIPPAGE_RATE as SLIPPAGE
-
-MIN_NOTIONAL = 5.0  # USDT 기준 최소 주문 금액
-
+# ✅ 캔들 조회 함수 (기본: 5m)
 def get_candles(symbol: str, interval: str = "5m", limit: int = 100):
-    """바이낸스 캔들 조회"""
     try:
-        klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
-        return klines
+        return client.futures_klines(symbol=symbol, interval=interval, limit=limit)
     except Exception as e:
-        print(f"[utils] 캔들 조회 오류: {e}")
+        logging.error(f"[utils] 캔들 조회 오류: {symbol} - {e}")
         return []
-    
-def get_futures_balance() -> float:
+
+# ✅ 현재가 조회 함수
+def get_price(symbol: str):
+    try:
+        return float(client.futures_symbol_ticker(symbol=symbol)['price'])
+    except Exception as e:
+        logging.error(f"[utils] 가격 조회 오류: {symbol} - {e}")
+        return None
+
+# ✅ EMA 계산 함수 (단순 평균 기반 대체 버전)
+def calculate_ema(values, period):
+    if len(values) < period:
+        return None
+    weights = np.exp(np.linspace(-1., 0., period))
+    weights /= weights.sum()
+    a = np.convolve(values, weights, mode='full')[:len(values)]
+    a[:period] = a[period]
+    return list(a)
+
+# ✅ RSI 계산 함수 (14 기준)
+def calculate_rsi(prices, period=14):
+    if len(prices) < period + 1:
+        return None
+    deltas = np.diff(prices)
+    seed = deltas[:period]
+    up = seed[seed >= 0].sum() / period
+    down = -seed[seed < 0].sum() / period
+    rs = up / down if down != 0 else 0
+    rsi = [100 - 100 / (1 + rs)]
+    for delta in deltas[period:]:
+        upval = max(delta, 0)
+        downval = -min(delta, 0)
+        up = (up * (period - 1) + upval) / period
+        down = (down * (period - 1) + downval) / period
+        rs = up / down if down != 0 else 0
+        rsi.append(100 - 100 / (1 + rs))
+    return rsi
+
+# ✅ 수량 반올림 함수
+def round_quantity(symbol: str, qty: float):
+    try:
+        info = client.futures_exchange_info()
+        for s in info["symbols"]:
+            if s["symbol"] == symbol:
+                step_size = float([f for f in s["filters"] if f["filterType"] == "LOT_SIZE"][0]["stepSize"])
+                precision = int(round(-math.log(step_size, 10), 0))
+                return round(qty, precision)
+    except Exception as e:
+        logging.error(f"[utils] 수량 반올림 오류: {symbol} - {e}")
+    return qty
+
+# ✅ 가격 반올림 함수
+def round_price(symbol: str, price: float):
+    try:
+        info = client.futures_exchange_info()
+        for s in info["symbols"]:
+            if s["symbol"] == symbol:
+                tick_size = float([f for f in s["filters"] if f["filterType"] == "PRICE_FILTER"][0]["tickSize"])
+                precision = int(round(-math.log(tick_size, 10), 0))
+                return round(price, precision)
+    except Exception as e:
+        logging.error(f"[utils] 가격 반올림 오류: {symbol} - {e}")
+    return price
+
+# ✅ 잔고 조회 함수
+def get_futures_balance():
     try:
         balances = client.futures_account_balance()
-        for asset in balances:
-            if asset["asset"] == "USDT":
-                balance = float(asset["balance"])
-                logging.debug(f"[잔고확인] 현재 USDT 잔고: {balance}")
-                return balance
+        usdt = next((b for b in balances if b['asset'] == 'USDT'), None)
+        return float(usdt['balance']) if usdt else 0.0
     except Exception as e:
-        logging.error(f"[오류] 잔고 조회 실패: {e}")
-    return 0.0
-
-
-def round_quantity(symbol: str, qty: float) -> float:
-    try:
-        step_size = get_symbol_precision(symbol)["step_size"]
-        return float(Decimal(str(qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
-    except Exception as e:
-        logging.error(f"[오류] 수량 반올림 실패({symbol}): {e}")
+        logging.error(f"[utils] 잔고 조회 오류: {e}")
         return 0.0
 
-
-def round_price(symbol: str, price: float) -> float:
+# ✅ 수량 계산 함수 (자산의 20%)
+def calculate_order_quantity(symbol: str, price: float, balance: float):
     try:
-        tick_size = get_symbol_precision(symbol)["tick_size"]
-        return float(Decimal(str(price)).quantize(Decimal(str(tick_size)), rounding=ROUND_DOWN))
-    except Exception as e:
-        logging.error(f"[오류] 가격 반올림 실패({symbol}): {e}")
-        return price
-
-
-def calculate_order_quantity(symbol: str, entry_price: float, balance: float) -> float:
-    try:
-        precision = get_symbol_precision(symbol)
-        step_size = precision["step_size"]
-
-        capital = balance * CAPITAL_USAGE
-        raw_qty = (capital * LEVERAGE) / entry_price
-        quantity = round_quantity(symbol, raw_qty)
-        notional = quantity * entry_price
-
-        logging.debug(f"[디버그] {symbol} 수량 계산 → 잔고: {balance:.2f}, 사용금액: {capital:.2f}, "
-                      f"진입가: {entry_price:.4f}, raw_qty: {raw_qty:.6f}, 절삭수량: {quantity}, notional: {notional:.4f}")
-
-        if quantity < step_size:
-            logging.warning(f"[경고] {symbol} 수량 {quantity} < 최소 단위 {step_size} → 최소 수량 보정 시도")
-            min_qty = round_quantity(symbol, step_size)
-            if min_qty * entry_price >= MIN_NOTIONAL:
-                logging.info(f"[보정] {symbol} 최소 수량 {min_qty} 진입 허용")
-                return min_qty
-            else:
-                logging.warning(f"[실패] {symbol} 최소 수량 {min_qty}도 최소 금액 미만")
-                return 0.0
-
-        if notional < MIN_NOTIONAL:
-            adjusted_qty = round_quantity(symbol, quantity + step_size)
-            adjusted_notional = adjusted_qty * entry_price
-            if adjusted_notional >= MIN_NOTIONAL:
-                logging.info(f"[보정] {symbol} 주문 금액 보정: 수량 {quantity} → {adjusted_qty}")
-                return adjusted_qty
-            else:
-                logging.warning(f"[실패] {symbol} 보정 후도 주문 금액 {adjusted_notional:.4f} < 최소 {MIN_NOTIONAL}")
-                return 0.0
-
+        portion = 0.2  # 자산의 20%
+        usdt_amount = balance * portion
+        quantity = usdt_amount / price
         return quantity
-
     except Exception as e:
-        logging.error(f"[오류] {symbol} 수량 계산 실패: {e}")
+        logging.error(f"[utils] 수량 계산 오류: {e}")
         return 0.0
 
-
-def apply_slippage(price: float, side: str, symbol: str) -> float:
-    try:
-        if side.upper() == "LONG":
-            return round_price(symbol, price * (1 + SLIPPAGE))
-        elif side.upper() == "SHORT":
-            return round_price(symbol, price * (1 - SLIPPAGE))
-        return round_price(symbol, price)
-    except Exception as e:
-        logging.error(f"[오류] 슬리피지 계산 실패: {e}")
-        return round_price(symbol, price)
-
-
-def to_kst(dt):
-    try:
-        return dt + timedelta(hours=9)
-    except Exception as e:
-        logging.error(f"[오류] KST 변환 실패: {e}")
-        return dt
-
-
-def calculate_rsi(prices: list, period: int = 14) -> float:
-    try:
-        import numpy as np
-        if len(prices) < period:
-            return 50.0
-        deltas = np.diff(prices)
-        seed = deltas[:period]
-        up = seed[seed > 0].sum() / period
-        down = -seed[seed < 0].sum() / period
-        rs = up / down if down != 0 else 0
-        return 100 - 100 / (1 + rs)
-    except Exception as e:
-        logging.error(f"[오류] RSI 계산 실패: {e}")
-        return 50.0
-
-
-def cancel_all_orders(symbol: str) -> None:
+# ✅ 모든 미체결 주문 취소 (로깅 없음)
+def cancel_all_orders(symbol: str):
     try:
         client.futures_cancel_all_open_orders(symbol=symbol)
     except Exception as e:
-        logging.error(f"[오류] {symbol} 주문 정리 실패: {e}")
+        logging.error(f"[utils] 주문 취소 오류: {symbol} - {e}")
