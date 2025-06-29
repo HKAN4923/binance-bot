@@ -12,7 +12,7 @@ from strategy_ema_cross import StrategyEMACross
 from strategy_holy_grail import StrategyHolyGrail
 from risk_config import MAX_POSITIONS
 from trade_summary import start_daily_file_sender
-from position_manager import load_positions, POSITIONS_TO_MONITOR
+from position_manager import load_positions, POSITIONS_TO_MONITOR, start_order_cleanup_loop
 
 start_daily_file_sender()
 
@@ -54,6 +54,7 @@ def print_analysis_status_loop():
 def main_loop():
     telegram_bot.send_message("🚀 자동매매 봇이 시작되었습니다.")
     strategies = load_enabled_strategies()
+    start_order_cleanup_loop(SYMBOL_LIST)  # ✅ 심볼 리스트 넘김
     trade_summary.start_summary_scheduler()
 
     # ✅ 포지션 감시 복원
@@ -86,4 +87,5 @@ def main_loop():
             time.sleep(10)
 
 if __name__ == "__main__":
+    
     main_loop()
