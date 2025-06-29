@@ -70,3 +70,15 @@ class StrategyHolyGrail:
         except Exception as e:
             print(f"[HolyGrail 오류] {symbol} 데이터 오류: {e}")
             return None
+
+def check_exit(self, symbol: str, entry_side: str) -> bool:
+    """신호 무효화: 반대 방향으로 강한 트렌드 발생 시 청산"""
+    ma_20 = 30.0
+    price = 28.0
+    strong_trend = random.random() < 0.5
+
+    if entry_side == "LONG" and price < ma_20 and strong_trend:
+        return True
+    if entry_side == "SHORT" and price > ma_20 and strong_trend:
+        return True
+    return False

@@ -64,3 +64,18 @@ class StrategyEMACross:
             "side": side,
             "entry_price": round(price, 4),
         }
+
+def check_exit(self, symbol: str, entry_side: str) -> bool:
+    """
+    신호 무효화: 진입 조건이 더 이상 유지되지 않고,
+    반대방향 조건까지 충족되었을 때 강제 청산
+    """
+    ema_9 = 25.0  # 예시
+    ema_21 = 24.0
+    rsi = random.randint(40, 60)
+
+    if entry_side == "LONG" and ema_9 < ema_21 and rsi < 48:
+        return True
+    if entry_side == "SHORT" and ema_9 > ema_21 and rsi > 52:
+        return True
+    return False

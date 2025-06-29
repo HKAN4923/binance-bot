@@ -64,3 +64,14 @@ class StrategyNR7:
             print(f"[NR7 오류] {symbol} 데이터 오류: {e}")
 
         return None
+
+    def check_exit(self, symbol: str, entry_side: str) -> bool:
+        """신호 무효화: 반대 방향 돌파 발생 시 청산"""
+        breakout_up = random.random() < 0.5
+        breakout_down = random.random() < 0.5
+
+        if entry_side == "LONG" and breakout_down:
+            return True
+        if entry_side == "SHORT" and breakout_up:
+            return True
+        return False

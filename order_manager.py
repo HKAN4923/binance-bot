@@ -98,7 +98,7 @@ def place_tp_sl_orders(symbol: str, side: str, entry_price: float, qty: float) -
         logging.error(f"[오류] TP/SL 지정가 주문 실패: {e}")
         return False
 
-def monitor_positions() -> None:
+def monitor_positions(strategies) -> None:
     now = datetime.utcnow()
     closed = []
 
@@ -130,6 +130,16 @@ def monitor_positions() -> None:
                 logging.warning(f"[타임컷] {symbol} 2시간 초과로 청산")
                 closed.append(pos)
                 continue
+
+            # ✅ 신호 무효화 체크
+            for strat in strategies:
+                if hasattr(strat, "name") and strat.name == pos["strategy"]:
+                    if hasattr(strat, "check_exit"):
+                        if strat.check_exit(symbol=pos["symbol"], entry_side=pos["side"]):
+                            pos["pnl"] = (current_price - pos["entry_price"]) * pos["qty"] if pos["side"] == "LONG" else (pos["entry_price"] - current_price) * pos["qty"]
+                            logging.warning(f"[신호 무효화] {symbol} → 조건 반전으로 청산")
+                            closed.append(pos)
+                            break
 
         except Exception as e:
             logging.error(f"[감시 오류] {pos['symbol']} 감시 실패: {e}")

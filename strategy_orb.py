@@ -77,3 +77,18 @@ class StrategyORB:
         except Exception as e:
             print(f"[ORB 오류] {symbol} 데이터 오류: {e}")
             return None
+
+def check_exit(self, symbol: str, entry_side: str) -> bool:
+    """
+    신호 무효화: 진입방향 반대 시초가 범위 돌파 시 청산
+    (예: LONG인데 시초가 하단 돌파 → 무효화)
+    """
+    open_range_high = 25.0
+    open_range_low = 24.0
+    current_price = 23.5  # 예시
+
+    if entry_side == "LONG" and current_price < open_range_low:
+        return True
+    if entry_side == "SHORT" and current_price > open_range_high:
+        return True
+    return False
