@@ -1,0 +1,46 @@
+import json
+import threading
+import websocket
+import logging
+
+price_cache = {}  # 실시간 가격 저장 딕셔너리
+
+
+def _on_message(ws, message):
+    try:
+        data = json.loads(message)
+        symbol = data.get("s")  # ex: BTCUSDT
+        price = float(data.get("c"))  # 마지막 체결 가격
+        price_cache[symbol] = price
+    except Exception as e:
+        logging.error(f"[WebSocket 오류] 메시지 처리 실패: {e}")
+
+
+def _on_error(ws, error):
+    logging.error(f"[WebSocket 오류] {error}")
+
+
+def _on_close(ws, close_status_code, close_msg):
+    logging.warning("[WebSocket 종료] 연결이 닫혔습니다")
+
+
+def _run_ws(symbols):
+    stream_names = [f"{s.lower()}@ticker" for s in symbols]
+    url = f"wss://fstream.binance.com/stream?streams={'/'.join(stream_names)}"
+    ws = websocket.WebSocketApp(
+        url,
+        on_message=_on_message,
+        on_error=_on_error,
+        on_close=_on_close,
+    )
+    ws.run_forever()
+
+
+def start_price_ws(symbols):
+    thread = threading.Thread(target=_run_ws, args=(symbols,), daemon=True)
+    thread.start()
+    logging.info("[WebSocket] 실시간 가격 수신 시작됨")
+
+
+def get_price(symbol):
+    return price_cache.get(symbol.upper(), 0.0)

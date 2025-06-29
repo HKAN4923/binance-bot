@@ -1,5 +1,6 @@
 import logging
 import time
+from price_ws import start_price_ws, get_price
 
 import config
 import order_manager
@@ -54,6 +55,7 @@ def print_analysis_status_loop():
     print(f"\U0001f4e1 실시간 분석중...({count}/{MAX_POSITIONS})")
 
 def main_loop():
+    start_price_ws(SYMBOL_LIST)  # ✅ 실시간 가격 수신 시작
     telegram_bot.send_message("\U0001f680 자동매매 봇이 시작되었습니다.")
     strategies = load_enabled_strategies()
     start_order_cleanup_loop(SYMBOL_LIST)

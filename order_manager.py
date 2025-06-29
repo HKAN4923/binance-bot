@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 from binance.exceptions import BinanceAPIException
-
+from price_ws import get_price
 from binance_client import client
 from risk_config import LEVERAGE, TIME_CUT_BY_STRATEGY, TP_SL_SETTINGS
 from utils import calculate_order_quantity, round_price, get_futures_balance, cancel_all_orders, apply_slippage
