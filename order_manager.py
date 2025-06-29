@@ -7,14 +7,14 @@ from risk_config import LEVERAGE, TIME_CUT_BY_STRATEGY, TP_SL_SETTINGS
 from utils import calculate_order_quantity, round_price
 from telegram_bot import send_message
 from position_manager import (
-    save_position,
+    add_position,
     remove_position,
-    get_open_orders,
-    cancel_all_orders,
+    get_positions,
     get_position_info,
-    POSITIONS_TO_MONITOR,
-    load_positions
+    cancel_all_orders
 )
+
+POSITIONS_TO_MONITOR = []
 
 def get_current_price(symbol: str) -> float:
     try:
@@ -94,10 +94,8 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
         logging.info(f"[진입] {strategy_name} 전략으로 {symbol} {side} 진입 완료 (수량: {quantity}, 체결가: {fill_price})")
         send_message(f"[진입] {strategy_name} 전략으로 {symbol} {side} 진입 완료 (수량: {quantity}, 체결가: {fill_price})")
 
-        # TP/SL 주문 시도
         place_tp_sl_orders(symbol, side, fill_price, quantity, strategy_name)
 
-        # ✅ 무조건 감시 등록
         position_data = {
             "symbol": symbol,
             "strategy": strategy_name,
@@ -105,7 +103,7 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
             "entry_price": fill_price,
             "entry_time": datetime.utcnow().isoformat()
         }
-        save_position(position_data)
+        add_position(position_data)
         POSITIONS_TO_MONITOR.append(position_data)
 
     except BinanceAPIException as e:
@@ -137,7 +135,6 @@ def monitor_positions(strategies) -> None:
             logging.warning(f"[경고] 감시 중 전략 {strat_name} 없음")
             continue
 
-        # 전략별 타임컷 청산
         cut_minutes = TIME_CUT_BY_STRATEGY.get(strat_name.upper(), 120)
         elapsed = now - entry_time
         if elapsed > timedelta(minutes=cut_minutes):
@@ -146,7 +143,6 @@ def monitor_positions(strategies) -> None:
             closed.append(pos)
             continue
 
-        # 전략별 TP/SL 가격 계산
         settings = TP_SL_SETTINGS.get(strat_name.upper(), {"tp": 0.02, "sl": 0.01})
         tp_pct = settings["tp"]
         sl_pct = settings["sl"]
@@ -155,7 +151,6 @@ def monitor_positions(strategies) -> None:
 
         current_price = get_current_price(symbol)
 
-        # 실시간 TP/SL 조건 감시
         if side.upper() == "BUY" and current_price >= tp_price:
             logging.warning(f"[익절청산] {symbol} 현재가 {current_price:.4f} >= TP {tp_price:.4f}")
             close_position(symbol, side)
@@ -177,7 +172,6 @@ def monitor_positions(strategies) -> None:
             closed.append(pos)
             continue
 
-        # 조건 반전 청산
         try:
             if hasattr(strat, "check_exit") and strat.check_exit(symbol, entry_price, side):
                 logging.warning(f"[신호 무효화] {symbol} → 조건 반전으로 청산")
@@ -201,7 +195,7 @@ def close_position(symbol: str, side: str) -> None:
             cancel_all_orders(symbol)
             return
 
-        order = client.futures_create_order(
+        client.futures_create_order(
             symbol=symbol,
             side=opposite,
             type="MARKET",
