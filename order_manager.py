@@ -12,17 +12,23 @@ from risk_config import USE_MARKET_TP_SL, USE_MARKET_TP_SL_BACKUP, TP_SL_SLIPPAG
 
 POSITIONS_TO_MONITOR: List[Dict[str, Any]] = []
 
+
 def get_current_price(symbol: str) -> float:
     ticker = client.futures_symbol_ticker(symbol=symbol)
     return float(ticker["price"])
 
+
 def place_entry_order(symbol: str, side: str, strategy_name: str) -> Dict[str, Any]:
     try:
+        # ✅ 레버리지 설정
         client.futures_change_leverage(symbol=symbol, leverage=LEVERAGE)
 
+        # ✅ 현재가, 잔고, 수량 계산
         entry_price = get_current_price(symbol)
-        qty = utils.calculate_order_quantity(symbol, entry_price)
+        balance = utils.get_futures_balance()
+        qty = utils.calculate_order_quantity(symbol, entry_price, balance)
         logging.info(f"[디버그] 진입 시도 - 심볼: {symbol}, 가격: {entry_price:.4f}, 수량: {qty:.6f}")
+
         side_binance = "BUY" if side.upper() == "LONG" else "SELL"
 
         order = client.futures_create_order(
@@ -45,10 +51,11 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> Dict[str, A
         }
 
         logging.info(f"[진입] {strategy_name} 전략으로 {symbol} {side} 진입 완료 (수량: {qty}, 체결가: {filled_price})")
-        
-        # ✅ 텔레그램 알림은 여기서만 1번 전송
+
+        # ✅ 텔레그램 알림
         telegram_bot.send_message(f"📥 진입 | 전략: {strategy_name} | 심볼: {symbol} | 방향: {side} | 가격: {filled_price:.4f}")
 
+        # ✅ TP/SL 설정
         if not USE_MARKET_TP_SL:
             success = place_tp_sl_orders(symbol, side, filled_price, qty)
             if not success and USE_MARKET_TP_SL_BACKUP:
@@ -68,8 +75,8 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> Dict[str, A
 
 def place_tp_sl_orders(symbol: str, side: str, entry_price: float, qty: float) -> bool:
     try:
-        tp_price = utils.apply_slippage(entry_price, side, TP_SL_SLIPPAGE_RATE)
-        sl_price = utils.apply_slippage(entry_price, side, -TP_SL_SLIPPAGE_RATE)
+        tp_price = utils.apply_slippage(entry_price, side)
+        sl_price = utils.apply_slippage(entry_price, side)
 
         side_tp = "SELL" if side.upper() == "LONG" else "BUY"
 
@@ -98,6 +105,7 @@ def place_tp_sl_orders(symbol: str, side: str, entry_price: float, qty: float) -
         logging.error(f"[오류] TP/SL 지정가 주문 실패: {e}")
         return False
 
+
 def monitor_positions(strategies) -> None:
     now = datetime.utcnow()
     closed = []
@@ -109,8 +117,8 @@ def monitor_positions(strategies) -> None:
             entry_time = datetime.fromisoformat(pos["entry_time"])
             elapsed = now - entry_time
 
-            tp = utils.apply_slippage(pos["entry_price"], pos["side"], TP_SL_SLIPPAGE_RATE)
-            sl = utils.apply_slippage(pos["entry_price"], pos["side"], -TP_SL_SLIPPAGE_RATE)
+            tp = utils.apply_slippage(pos["entry_price"], pos["side"])
+            sl = utils.apply_slippage(pos["entry_price"], pos["side"])
 
             if pos["side"] == "LONG":
                 if current_price >= tp or current_price <= sl:
@@ -162,6 +170,7 @@ def monitor_positions(strategies) -> None:
                         logging.info(f"[유령정리] {sym} TP/SL 주문 자동취소")
     except Exception as e:
         logging.warning(f"[유령 정리 실패] {e}")
+
 
 def force_market_exit(position: Dict[str, Any]) -> None:
     try:
