@@ -16,7 +16,7 @@ POSITIONS_TO_MONITOR = []
 
 def get_current_price(symbol: str) -> float:
     try:
-        ticker = client.futures_ticker_price(symbol=symbol)
+        ticker = client.futures_symbol_ticker(symbol=symbol)
         return float(ticker['price'])
     except Exception as e:
         logging.error(f"[오류] 현재가 조회 실패: {e}")
