@@ -1,6 +1,6 @@
-"""자동매매 봇 메인 실행 파일 (라쉬케5 기준)
- - 활성화 전략: ORB, NR7, EMA, Holy Grail
- - Pullback 전략 제거됨
+"""자동매매 봇 메인 실행 파일 (라쉬케5 구조 개선)
+ - 모든 전략이 5초마다 전체 심볼 동시 탐색
+ - EMA 조건 완화, Pullback 제거, Holy Grail 유지
 """
 
 import logging
@@ -29,7 +29,6 @@ logging.basicConfig(
     ]
 )
 
-# 고정 심볼 리스트 (시장성이 높은 50개)
 SYMBOL_LIST = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT",
     "DOTUSDT", "MATICUSDT", "LTCUSDT", "TRXUSDT", "NEARUSDT", "UNIUSDT", "ATOMUSDT", "ETCUSDT", "ICPUSDT",
@@ -61,25 +60,21 @@ def main_loop():
     strategies = load_enabled_strategies()
     trade_summary.start_summary_scheduler()
 
-    symbol_index = 0
-
     while True:
         try:
-            symbol = SYMBOL_LIST[symbol_index]
-            symbol_index = (symbol_index + 1) % len(SYMBOL_LIST)
-
             for strat in strategies:
-                if not position_manager.can_enter(strat.name):
-                    continue
-                signal = strat.check_entry(symbol)
-                if signal:
-                    if position_manager.is_duplicate(signal["symbol"], strat.name):
+                for symbol in SYMBOL_LIST:
+                    if not position_manager.can_enter(strat.name):
                         continue
-                    if position_manager.is_in_cooldown(signal["symbol"], strat.name):
-                        continue
-                    order_manager.place_entry_order(
-                        signal["symbol"], signal["side"], strat.name
-                    )
+                    signal = strat.check_entry(symbol)
+                    if signal:
+                        if position_manager.is_duplicate(signal["symbol"], strat.name):
+                            continue
+                        if position_manager.is_in_cooldown(signal["symbol"], strat.name):
+                            continue
+                        order_manager.place_entry_order(
+                            signal["symbol"], signal["side"], strat.name
+                        )
 
             order_manager.monitor_positions()
             print_analysis_status_loop()
