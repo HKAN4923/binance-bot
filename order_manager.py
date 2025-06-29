@@ -4,14 +4,15 @@ from binance.exceptions import BinanceAPIException
 
 from binance_client import client
 from risk_config import LEVERAGE, TIME_CUT_BY_STRATEGY, TP_SL_SETTINGS
-from utils import calculate_order_quantity, round_price, get_futures_balance, cancel_all_orders
+from utils import calculate_order_quantity, round_price, get_futures_balance, cancel_all_orders, apply_slippage
 from telegram_bot import send_message
 from position_manager import (
     add_position,
     remove_position,
     get_positions,
     is_duplicate,
-    is_in_cooldown
+    is_in_cooldown,
+    load_positions as get_positions_from_log
 )
 
 def get_current_price(symbol: str) -> float:
@@ -101,7 +102,7 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
             "entry_price": fill_price,
             "entry_time": datetime.utcnow().isoformat()
         }
-        add_position(position_data)  # 기록용 저장만
+        add_position(position_data)
 
     except BinanceAPIException as e:
         logging.error(f"[오류] 진입 주문 실패(Binance): {e}")
@@ -125,7 +126,6 @@ def monitor_positions(strategies) -> None:
         side = "BUY" if float(pos["positionAmt"]) > 0 else "SELL"
         strategy_name = None
 
-        # 전략 이름 매칭 (positions.json에서 찾아야 함)
         for record in get_positions_from_log():
             if record["symbol"] == symbol and record["side"].upper() == side.upper():
                 strategy_name = record["strategy"]
@@ -135,7 +135,6 @@ def monitor_positions(strategies) -> None:
             logging.warning(f"[스킵] {symbol} 전략 정보 없음")
             continue
 
-        # 타임컷
         cut_minutes = TIME_CUT_BY_STRATEGY.get(strategy_name.upper(), 120)
         elapsed = now - entry_time
         if elapsed > timedelta(minutes=cut_minutes):
@@ -144,7 +143,6 @@ def monitor_positions(strategies) -> None:
             remove_position({"symbol": symbol, "strategy": strategy_name})
             continue
 
-        # TP/SL 조건 확인
         settings = TP_SL_SETTINGS.get(strategy_name.upper(), {"tp": 0.02, "sl": 0.01})
         tp_price = entry_price * (1 + settings["tp"]) if side == "BUY" else entry_price * (1 - settings["tp"])
         sl_price = entry_price * (1 - settings["sl"]) if side == "BUY" else entry_price * (1 + settings["sl"])
@@ -167,11 +165,6 @@ def monitor_positions(strategies) -> None:
             logging.warning(f"[손절청산] {symbol} 현재가 {current_price:.4f} >= SL {sl_price:.4f}")
             close_position(symbol, side)
             remove_position({"symbol": symbol, "strategy": strategy_name})
-
-def get_positions_from_log():
-    """positions.json에서 기록된 포지션 불러오기 (전략 확인용)"""
-    from position_manager import load_positions
-    return load_positions()
 
 def close_position(symbol: str, side: str) -> None:
     try:

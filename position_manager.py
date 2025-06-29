@@ -90,7 +90,7 @@ def start_order_cleanup_loop(symbol_list: List[str]):
                         cancel_all_orders(symbol)
             except Exception as e:
                 logging.error(f"[오류] 주문 정리 루프 실패: {e}")
-            time.sleep(10)
+            time.sleep(60)
 
     t = threading.Thread(target=loop, daemon=True)
     t.start()
