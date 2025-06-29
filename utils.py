@@ -28,24 +28,29 @@ def round_price(symbol: str, price: float) -> float:
     return max(rounded_price, float(tick_size))
 
 def calculate_order_quantity(symbol: str, entry_price: float, balance: float) -> float:
-    """잔고, 진입 가격, 설정값 기준으로 수량 계산"""
+    """
+    잔고, 진입 가격, 설정값 기준으로 수량 계산
+    - 최소 수량 제한
+    - 최소 주문 금액 제한
+    - step_size 절삭
+    """
     try:
         precision = get_symbol_precision(symbol)
         step_size = precision["step_size"]
 
         capital = balance * CAPITAL_USAGE
         raw_qty = (capital * LEVERAGE) / entry_price
-
-        # 소수점 자릿수 계산
-        decimal_places = abs(Decimal(str(step_size)).as_tuple().exponent)
-        quantity = round(raw_qty, decimal_places)
+        quantity = round_quantity(symbol, raw_qty)
+        notional = quantity * entry_price
 
         if quantity <= 0:
-            logging.warning(f"[경고] 수량이 0입니다: {symbol}")
+            logging.warning(f"[경고] 수량이 0입니다: {symbol} → 계산된 수량이 step_size보다 작음")
+            return 0.0
+        if notional < MIN_NOTIONAL:
+            logging.warning(f"[경고] {symbol} 주문 금액 {notional:.4f} USDT < 최소 {MIN_NOTIONAL} USDT")
             return 0.0
 
-        # step size 기반 절삭 처리로 -1111 오류 방지
-        return round_quantity(symbol, quantity)
+        return quantity
 
     except Exception as e:
         logging.error(f"[오류] 수량 계산 실패: {e}")
@@ -77,6 +82,6 @@ def cancel_all_orders(symbol: str) -> None:
     """지정된 심볼의 모든 미체결 주문 취소"""
     try:
         client.futures_cancel_all_open_orders(symbol=symbol)
-
+        logging.info(f"[정리] {symbol} 미체결 주문 전부 취소 완료")
     except Exception as e:
         logging.error(f"[오류] {symbol} 주문 정리 실패: {e}")
