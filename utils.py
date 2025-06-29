@@ -1,56 +1,66 @@
-"""utils.py - 라쉬케5 전략 보조 함수 (최종 안정 + 디버깅 포함)
+"""utils.py - 라쉬케5 전략 보조 유틸리티
  - 수량/가격 정밀도 처리
- - 실시간 잔고 기준 수량 계산
- - 슬리피지 반영 가격 계산 추가
- - 수량 계산 디버깅 로깅 포함
+ - 슬리피지 반영
+ - RSI 계산
+ - 주문 수량 계산
+ - 미체결 주문 정리
 """
 import logging
 from decimal import Decimal, ROUND_DOWN
+from datetime import timedelta
+
 from binance_client import get_symbol_precision, client
 from risk_config import CAPITAL_USAGE, LEVERAGE, TP_SL_SLIPPAGE_RATE as SLIPPAGE
 
 MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT 기준)
 
+
 def get_futures_balance() -> float:
-    balances = client.futures_account_balance()
-    for asset in balances:
-        if asset["asset"] == "USDT":
-            return float(asset["balance"])
+    """USDT 기준 실시간 선물 잔고 반환"""
+    try:
+        balances = client.futures_account_balance()
+        for asset in balances:
+            if asset["asset"] == "USDT":
+                return float(asset["balance"])
+    except Exception as e:
+        logging.error(f"[오류] 잔고 조회 실패: {e}")
     return 0.0
 
+
 def round_quantity(symbol: str, qty: float) -> float:
-    step_size = get_symbol_precision(symbol)["step_size"]
-    rounded_qty = float(Decimal(str(qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
-    if rounded_qty < step_size:
+    """심볼별 step_size 기준 수량 절삭"""
+    try:
+        step_size = get_symbol_precision(symbol)["step_size"]
+        rounded_qty = float(Decimal(str(qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
+        return rounded_qty if rounded_qty >= step_size else 0.0
+    except Exception as e:
+        logging.error(f"[오류] 수량 반올림 실패({symbol}): {e}")
         return 0.0
-    return rounded_qty
+
 
 def round_price(symbol: str, price: float) -> float:
-    tick_size = get_symbol_precision(symbol)["tick_size"]
-    return float(Decimal(str(price)).quantize(Decimal(str(tick_size)), rounding=ROUND_DOWN))
+    """심볼별 tick_size 기준 가격 절삭"""
+    try:
+        tick_size = get_symbol_precision(symbol)["tick_size"]
+        return float(Decimal(str(price)).quantize(Decimal(str(tick_size)), rounding=ROUND_DOWN))
+    except Exception as e:
+        logging.error(f"[오류] 가격 반올림 실패({symbol}): {e}")
+        return price
+
 
 def calculate_order_quantity(symbol: str, entry_price: float, balance: float) -> float:
-    """
-    잔고, 진입 가격, 설정값 기준으로 수량 계산
-    - 최소 수량 제한
-    - 최소 주문 금액 제한 (레버리지 미포함)
-    - step_size 절삭
-    """
+    """진입 가격, 잔고 기준 수량 계산 (정밀도 반영, 최소금액 검증 포함)"""
     try:
-        precision = get_symbol_precision(symbol)
-        step_size = precision["step_size"]
-
         capital = balance * CAPITAL_USAGE
         raw_qty = (capital * LEVERAGE) / entry_price
         quantity = round_quantity(symbol, raw_qty)
         notional = quantity * entry_price
 
-        # ✅ 디버그 출력 추가
-        logging.debug(f"[디버그] {symbol} 수량 계산 → 잔고: {balance:.2f}, 사용금액: {capital:.2f}, 가격: {entry_price:.4f}, "
-                      f"raw_qty: {raw_qty:.6f}, 절삭수량: {quantity}, step_size: {step_size}, notional: {notional:.4f}")
+        logging.debug(f"[디버그] {symbol} 수량 계산 → 잔고: {balance:.2f}, 사용금액: {capital:.2f}, "
+                      f"진입가: {entry_price:.4f}, raw_qty: {raw_qty:.6f}, 절삭수량: {quantity}, notional: {notional:.4f}")
 
         if quantity <= 0:
-            logging.warning(f"[경고] 수량이 0입니다: {symbol}")
+            logging.warning(f"[경고] {symbol} 수량이 0입니다")
             return 0.0
         if notional < MIN_NOTIONAL:
             logging.warning(f"[경고] {symbol} 주문 금액 {notional:.4f} USDT < 최소 {MIN_NOTIONAL} USDT")
@@ -58,32 +68,50 @@ def calculate_order_quantity(symbol: str, entry_price: float, balance: float) ->
 
         return quantity
     except Exception as e:
-        logging.error(f"[오류] 수량 계산 실패: {e}")
+        logging.error(f"[오류] {symbol} 수량 계산 실패: {e}")
         return 0.0
 
+
 def apply_slippage(price: float, side: str) -> float:
-    if side.upper() == "LONG":
-        return round(price * (1 + SLIPPAGE), 4)
-    elif side.upper() == "SHORT":
-        return round(price * (1 - SLIPPAGE), 4)
+    """롱/숏 방향에 따라 슬리피지 반영"""
+    try:
+        if side.upper() == "LONG":
+            return round(price * (1 + SLIPPAGE), 4)
+        elif side.upper() == "SHORT":
+            return round(price * (1 - SLIPPAGE), 4)
+    except Exception as e:
+        logging.error(f"[오류] 슬리피지 계산 실패: {e}")
     return round(price, 4)
 
+
 def to_kst(dt):
-    from datetime import timedelta
-    return dt + timedelta(hours=9)
+    """UTC → KST 변환"""
+    try:
+        return dt + timedelta(hours=9)
+    except Exception as e:
+        logging.error(f"[오류] KST 변환 실패: {e}")
+        return dt
+
 
 def calculate_rsi(prices: list, period: int = 14) -> float:
-    import numpy as np
-    if len(prices) < period:
-        return 50
-    deltas = np.diff(prices)
-    seed = deltas[:period]
-    up = seed[seed > 0].sum() / period
-    down = -seed[seed < 0].sum() / period
-    rs = up / down if down != 0 else 0
-    return 100 - 100 / (1 + rs)
+    """RSI 계산 (기본 14)"""
+    try:
+        import numpy as np
+        if len(prices) < period:
+            return 50.0
+        deltas = np.diff(prices)
+        seed = deltas[:period]
+        up = seed[seed > 0].sum() / period
+        down = -seed[seed < 0].sum() / period
+        rs = up / down if down != 0 else 0
+        return 100 - 100 / (1 + rs)
+    except Exception as e:
+        logging.error(f"[오류] RSI 계산 실패: {e}")
+        return 50.0
+
 
 def cancel_all_orders(symbol: str) -> None:
+    """해당 심볼의 모든 미체결 주문 취소 (조용히 처리)"""
     try:
         client.futures_cancel_all_open_orders(symbol=symbol)
     except Exception as e:
