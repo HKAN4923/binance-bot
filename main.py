@@ -1,8 +1,3 @@
-"""자동매매 봇 메인 실행 파일 (라쉬케5 구조 개선)
- - 모든 전략이 5초마다 전체 심볼 동시 탐색
- - EMA 조건 완화, Pullback 제거, Holy Grail 유지
-"""
-
 import logging
 import time
 
@@ -17,6 +12,7 @@ from strategy_ema_cross import StrategyEMACross
 from strategy_holy_grail import StrategyHolyGrail
 from risk_config import MAX_POSITIONS
 from trade_summary import start_daily_file_sender
+from position_manager import load_positions, POSITIONS_TO_MONITOR
 
 start_daily_file_sender()
 
@@ -60,6 +56,11 @@ def main_loop():
     strategies = load_enabled_strategies()
     trade_summary.start_summary_scheduler()
 
+    # ✅ 포지션 감시 복원
+    for pos in load_positions():
+        POSITIONS_TO_MONITOR.append(pos)
+        logging.info(f"[복원] {pos['symbol']} 전략 {pos['strategy']} 감시 복원 완료")
+
     while True:
         try:
             for strat in strategies:
@@ -76,7 +77,7 @@ def main_loop():
                             signal["symbol"], signal["side"], strat.name
                         )
 
-            order_manager.monitor_positions(strategies)  # ✅ 인자 추가됨
+            order_manager.monitor_positions(strategies)
             print_analysis_status_loop()
             time.sleep(5)
 
@@ -84,15 +85,5 @@ def main_loop():
             logging.error(f"[오류] 메인 루프 중단됨: {e}")
             time.sleep(10)
 
-import json
-from pathlib import Path
-
-def clear_json_files():
-    for filename in ["trades.json", "positions.json"]:
-        path = Path(filename)
-        if path.exists():
-            path.write_text("[]")
-
 if __name__ == "__main__":
-    clear_json_files()
     main_loop()

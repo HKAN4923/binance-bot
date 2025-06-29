@@ -20,8 +20,16 @@ from position_manager import (
 def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
     try:
         entry_price = get_current_price(symbol)
+        if entry_price == 0:
+            logging.warning(f"[스킵] {symbol} 진입 실패 - 현재가 조회 실패")
+            return
+
         balance = float(client.futures_account_balance()[0]['balance'])
         quantity = calculate_order_quantity(symbol, entry_price, balance)
+
+        if quantity == 0:
+            logging.warning(f"[스킵] {symbol} 진입 실패 - 수량 계산 실패")
+            return
 
         logging.info(f"[디버그] 진입 시도 - 심볼: {symbol}, 가격: {entry_price:.4f}, 수량: {quantity:.6f}")
 
@@ -39,10 +47,8 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
         logging.info(f"[진입] {strategy_name} 전략으로 {symbol} {side} 진입 완료 (수량: {quantity}, 체결가: {fill_price})")
         send_message(f"[진입] {strategy_name} 전략으로 {symbol} {side} 진입 완료 (수량: {quantity}, 체결가: {fill_price})")
 
-        # TP/SL 주문 설정
         tp_ordered, sl_ordered = place_tp_sl_orders(symbol, side, fill_price, quantity)
 
-        # ✅ 반드시 감시 등록
         position_data = {
             "symbol": symbol,
             "strategy": strategy_name,
@@ -58,10 +64,9 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
             send_message(f"[백업] TP/SL 실패 → {symbol} 감시 중 (조건반전/타임컷 감시)")
 
     except BinanceAPIException as e:
-        logging.error(f"[오류] 진입 주문 실패: {e}")
+        logging.error(f"[오류] 진입 주문 실패(Binance): {e}")
     except Exception as e:
         logging.error(f"[오류] 진입 주문 실패: {e}")
-
 
 def monitor_positions(strategies) -> None:
     now = datetime.utcnow()
@@ -98,18 +103,16 @@ def monitor_positions(strategies) -> None:
 
         # 조건 반전 여부 확인
         try:
-            if strat.check_exit(symbol, entry_price, side):
+            if hasattr(strat, "check_exit") and strat.check_exit(symbol, entry_price, side):
                 logging.warning(f"[신호 무효화] {symbol} → 조건 반전으로 청산")
                 close_position(symbol, side)
                 closed.append(pos)
         except Exception as e:
             logging.error(f"[오류] {symbol} 조건 확인 중 오류: {e}")
 
-    # 감시 종료된 포지션 제거
     for c in closed:
         remove_position(c["symbol"], c["strategy"])
         POSITIONS_TO_MONITOR.remove(c)
-
 
 def close_position(symbol: str, side: str) -> None:
     try:
