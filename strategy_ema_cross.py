@@ -8,8 +8,8 @@ from utils import get_candles, calculate_ema, calculate_rsi
 # 승률 조정, 진입 민감도 조정 시 아래 값만 바꾸면 됨
 # --------------------------------------
 USE_RSI_FILTER = True       # RSI 필터를 사용할지 여부
-RSI_LONG_MIN = 52           # 롱 진입 최소 RSI 기준 (ex. 55 → 보수적)
-RSI_SHORT_MAX = 48          # 숏 진입 최대 RSI 기준 (ex. 45 → 보수적)
+RSI_LONG_MIN = 50           # 롱 진입 최소 RSI 기준 (ex. 55 → 보수적)
+RSI_SHORT_MAX = 50          # 숏 진입 최대 RSI 기준 (ex. 45 → 보수적)
 
 class StrategyEMACross:
     def __init__(self, symbols):

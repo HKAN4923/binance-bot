@@ -28,9 +28,9 @@ class StrategyHolyGrail:
                 logging.debug(f"[HOLY] {symbol} → 현재가 없음")
                 return None
 
-            near_ema = abs(current_price - ema20[-1]) / ema20[-1] < 0.010  # ✅ 유지
+            near_ema = abs(current_price - ema20[-1]) / ema20[-1] < 0.012  # ✅ 유지
             pullback_range = (max(highs[-5:-1]) - min(lows[-5:-1])) / closes[-1]
-            pullback_ok = pullback_range > 0.007  # ✅ 유지
+            pullback_ok = pullback_range > 0.008  # ✅ 유지
 
             if near_ema and pullback_ok:
                 if closes[-2] < ema20[-2] and closes[-1] > ema20[-1]:
