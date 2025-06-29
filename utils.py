@@ -11,9 +11,10 @@ from binance_client import get_symbol_precision
 
 
 def calculate_order_quantity(symbol: str, price: float, balance: float = 1000) -> float:
-    """자산, 비율, 레버리지를 기준으로 주문 수량 계산"""
+    """자산, 비율, 레버리지를 기준으로 주문 수량 계산 (최소 0.001 보장)"""
     raw_qty = balance * CAPITAL_USAGE * LEVERAGE / price
-    return round_quantity(symbol, raw_qty)
+    qty = round_quantity(symbol, raw_qty)
+    return max(qty, 0.001)  # ✅ 최소값 설정으로 Precision 오류 방지
 
 
 def calculate_rsi(prices: Iterable[float], period: int = 14) -> float:
@@ -60,6 +61,5 @@ def round_price(symbol: str, price: float) -> float:
 
 
 def round_quantity(symbol: str, qty: float) -> float:
-    """step size 기준 수량 반올림"""
     step_size = get_symbol_precision(symbol)["step_size"]
-    return math.floor(qty / step_size) * step_size
+    return max((qty // step_size) * step_size, step_size)

@@ -22,6 +22,7 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> Dict[str, A
 
         entry_price = get_current_price(symbol)
         qty = utils.calculate_order_quantity(symbol, entry_price)
+        logging.info(f"[디버그] 진입 시도 - 심볼: {symbol}, 가격: {entry_price:.4f}, 수량: {qty:.6f}")
         side_binance = "BUY" if side.upper() == "LONG" else "SELL"
 
         order = client.futures_create_order(
