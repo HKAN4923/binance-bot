@@ -103,6 +103,14 @@ def place_tp_sl_orders(symbol: str, side: str, entry_price: float, qty: float, s
 
 def monitor_positions(strategies) -> None:
     now = datetime.utcnow()
+
+    if POSITIONS_TO_MONITOR:
+        logging.debug(f"[감시중] 현재 감시 중인 포지션 수: {len(POSITIONS_TO_MONITOR)}")
+        for p in POSITIONS_TO_MONITOR:
+            logging.debug(f"[감시포지션] {p['symbol']} | 전략: {p['strategy']} | 방향: {p['side']} | 진입가: {p['entry_price']}")
+    else:
+        logging.debug("[감시중] 현재 감시 중인 포지션 없음")
+
     closed = []
 
     for pos in POSITIONS_TO_MONITOR:
