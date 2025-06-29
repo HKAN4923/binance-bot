@@ -76,7 +76,7 @@ def main_loop():
                             signal["symbol"], signal["side"], strat.name
                         )
 
-            order_manager.monitor_positions()
+            order_manager.monitor_positions(strategies)  # ✅ 인자 추가됨
             print_analysis_status_loop()
             time.sleep(5)
 
@@ -92,6 +92,7 @@ def clear_json_files():
         path = Path(filename)
         if path.exists():
             path.write_text("[]")
+
 if __name__ == "__main__":
     clear_json_files()
     main_loop()

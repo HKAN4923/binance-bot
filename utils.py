@@ -27,15 +27,23 @@ def round_price(symbol: str, price: float) -> float:
     rounded_price = float(Decimal(str(price)).quantize(Decimal(str(tick_size)), rounding=ROUND_DOWN))
     return max(rounded_price, float(tick_size))
 
-def calculate_order_quantity(symbol: str, price: float, balance: float = None) -> float:
-    if balance is None:
-        balance = get_futures_balance()
-    raw_qty = balance * CAPITAL_USAGE * LEVERAGE / price
-    qty = round_quantity(symbol, raw_qty)
-    notional = qty * price
-    if notional < MIN_NOTIONAL:
+def calculate_order_quantity(symbol: str, entry_price: float, balance: float) -> float:
+    """잔고, 진입 가격, 설정값 기준으로 수량 계산"""
+    try:
+        precision = get_symbol_precision(symbol)
+        capital = balance * CAPITAL_USAGE
+        quantity = (capital * LEVERAGE) / entry_price
+        quantity = round(quantity, precision)
+
+        if quantity <= 0:
+            logging.warning(f"[경고] 수량이 0입니다: {symbol}")
+            return 0.0
+
+        return quantity
+    except Exception as e:
+        logging.error(f"[오류] 수량 계산 실패: {e}")
         return 0.0
-    return qty
+
 
 def apply_slippage(price: float, side: str) -> float:
     """진입/청산 가격에 슬리피지를 적용한 가격 반환"""
