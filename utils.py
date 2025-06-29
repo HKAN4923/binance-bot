@@ -19,7 +19,6 @@ def get_futures_balance() -> float:
     return 0.0
 
 def round_quantity(symbol: str, qty: float) -> float:
-    """심볼별 수량 반올림 (step_size 기준)"""
     step_size = get_symbol_precision(symbol)["step_size"]
     rounded_qty = float(Decimal(str(qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
     return max(rounded_qty, float(step_size))
