@@ -32,15 +32,21 @@ def calculate_order_quantity(symbol: str, entry_price: float, balance: float) ->
     """잔고, 진입 가격, 설정값 기준으로 수량 계산"""
     try:
         precision = get_symbol_precision(symbol)
+        step_size = precision["step_size"]
+
         capital = balance * CAPITAL_USAGE
-        quantity = (capital * LEVERAGE) / entry_price
-        quantity = round(quantity, precision)
+        raw_qty = (capital * LEVERAGE) / entry_price
+
+        # 소수점 자릿수 계산
+        decimal_places = abs(Decimal(str(step_size)).as_tuple().exponent)
+        quantity = round(raw_qty, decimal_places)
 
         if quantity <= 0:
             logging.warning(f"[경고] 수량이 0입니다: {symbol}")
             return 0.0
 
         return quantity
+
     except Exception as e:
         logging.error(f"[오류] 수량 계산 실패: {e}")
         return 0.0
