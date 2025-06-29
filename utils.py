@@ -1,8 +1,10 @@
 """utils.py - 라쉬케5 전략 보조 유틸리티
- - 수량/가격 정밀도 처리
- - 슬리피지 반영
+ - 실시간 잔고 조회
+ - 수량/가격 정밀도 반올림
+ - 최소 수량/주문금액 보정
+ - 슬리피지 계산
  - RSI 계산
- - 주문 수량 계산
+ - KST 시간 변환
  - 미체결 주문 정리
 """
 import logging
@@ -21,7 +23,9 @@ def get_futures_balance() -> float:
         balances = client.futures_account_balance()
         for asset in balances:
             if asset["asset"] == "USDT":
-                return float(asset["balance"])
+                balance = float(asset["balance"])
+                logging.debug(f"[잔고확인] 현재 USDT 잔고: {balance}")
+                return balance
     except Exception as e:
         logging.error(f"[오류] 잔고 조회 실패: {e}")
     return 0.0
@@ -31,8 +35,7 @@ def round_quantity(symbol: str, qty: float) -> float:
     """심볼별 step_size 기준 수량 절삭"""
     try:
         step_size = get_symbol_precision(symbol)["step_size"]
-        rounded_qty = float(Decimal(str(qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
-        return rounded_qty if rounded_qty >= step_size else 0.0
+        return float(Decimal(str(qty)).quantize(Decimal(str(step_size)), rounding=ROUND_DOWN))
     except Exception as e:
         logging.error(f"[오류] 수량 반올림 실패({symbol}): {e}")
         return 0.0
@@ -49,6 +52,7 @@ def round_price(symbol: str, price: float) -> float:
 
 
 def calculate_order_quantity(symbol: str, entry_price: float, balance: float) -> float:
+    """잔고/진입가/설정값 기준 수량 계산 + 최소 보정 포함"""
     try:
         precision = get_symbol_precision(symbol)
         step_size = precision["step_size"]
@@ -61,20 +65,26 @@ def calculate_order_quantity(symbol: str, entry_price: float, balance: float) ->
         logging.debug(f"[디버그] {symbol} 수량 계산 → 잔고: {balance:.2f}, 사용금액: {capital:.2f}, "
                       f"진입가: {entry_price:.4f}, raw_qty: {raw_qty:.6f}, 절삭수량: {quantity}, notional: {notional:.4f}")
 
-        # ✅ 최소 수량보다 작으면 실패
+        # ✅ 최소 수량 보정
         if quantity < step_size:
-            logging.warning(f"[경고] {symbol} 수량 {quantity} < 최소 단위 {step_size}")
-            return 0.0
+            logging.warning(f"[경고] {symbol} 수량 {quantity} < 최소 단위 {step_size} → 최소 수량 보정 시도")
+            min_qty = round_quantity(symbol, step_size)
+            if min_qty * entry_price >= MIN_NOTIONAL:
+                logging.info(f"[보정] {symbol} 최소 수량 {min_qty} 진입 허용")
+                return min_qty
+            else:
+                logging.warning(f"[실패] {symbol} 최소 수량 {min_qty}도 최소 금액 미만")
+                return 0.0
 
-        # ✅ 최소 금액 미만 시 → 한 단계 올려서 재시도
+        # ✅ 최소 금액 보정
         if notional < MIN_NOTIONAL:
             adjusted_qty = round_quantity(symbol, quantity + step_size)
             adjusted_notional = adjusted_qty * entry_price
             if adjusted_notional >= MIN_NOTIONAL:
-                logging.info(f"[보정] {symbol} 수량 보정: {quantity} → {adjusted_qty}")
+                logging.info(f"[보정] {symbol} 주문 금액 보정: 수량 {quantity} → {adjusted_qty}")
                 return adjusted_qty
             else:
-                logging.warning(f"[경고] {symbol} 주문 금액 {notional:.4f} USDT < 최소 {MIN_NOTIONAL} USDT")
+                logging.warning(f"[실패] {symbol} 보정 후도 주문 금액 {adjusted_notional:.4f} < 최소 {MIN_NOTIONAL}")
                 return 0.0
 
         return quantity
@@ -84,9 +94,8 @@ def calculate_order_quantity(symbol: str, entry_price: float, balance: float) ->
         return 0.0
 
 
-
 def apply_slippage(price: float, side: str) -> float:
-    """롱/숏 방향에 따라 슬리피지 반영"""
+    """롱/숏 방향에 따라 슬리피지 반영 가격 반환"""
     try:
         if side.upper() == "LONG":
             return round(price * (1 + SLIPPAGE), 4)
@@ -98,7 +107,7 @@ def apply_slippage(price: float, side: str) -> float:
 
 
 def to_kst(dt):
-    """UTC → KST 변환"""
+    """UTC → KST 시간 변환"""
     try:
         return dt + timedelta(hours=9)
     except Exception as e:
@@ -107,7 +116,7 @@ def to_kst(dt):
 
 
 def calculate_rsi(prices: list, period: int = 14) -> float:
-    """RSI 계산 (기본 14)"""
+    """RSI 지표 계산"""
     try:
         import numpy as np
         if len(prices) < period:
@@ -124,7 +133,7 @@ def calculate_rsi(prices: list, period: int = 14) -> float:
 
 
 def cancel_all_orders(symbol: str) -> None:
-    """해당 심볼의 모든 미체결 주문 취소 (조용히 처리)"""
+    """심볼별 미체결 주문 전체 취소"""
     try:
         client.futures_cancel_all_open_orders(symbol=symbol)
     except Exception as e:
