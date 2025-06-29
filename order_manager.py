@@ -137,6 +137,7 @@ def monitor_positions(strategies) -> None:
             logging.warning(f"[경고] 감시 중 전략 {strat_name} 없음")
             continue
 
+        # 전략별 타임컷 청산
         cut_minutes = TIME_CUT_BY_STRATEGY.get(strat_name.upper(), 120)
         elapsed = now - entry_time
         if elapsed > timedelta(minutes=cut_minutes):
@@ -145,6 +146,38 @@ def monitor_positions(strategies) -> None:
             closed.append(pos)
             continue
 
+        # 전략별 TP/SL 가격 계산
+        settings = TP_SL_SETTINGS.get(strat_name.upper(), {"tp": 0.02, "sl": 0.01})
+        tp_pct = settings["tp"]
+        sl_pct = settings["sl"]
+        tp_price = entry_price * (1 + tp_pct) if side.upper() == "BUY" else entry_price * (1 - tp_pct)
+        sl_price = entry_price * (1 - sl_pct) if side.upper() == "BUY" else entry_price * (1 + sl_pct)
+
+        current_price = get_current_price(symbol)
+
+        # 실시간 TP/SL 조건 감시
+        if side.upper() == "BUY" and current_price >= tp_price:
+            logging.warning(f"[익절청산] {symbol} 현재가 {current_price:.4f} >= TP {tp_price:.4f}")
+            close_position(symbol, side)
+            closed.append(pos)
+            continue
+        elif side.upper() == "BUY" and current_price <= sl_price:
+            logging.warning(f"[손절청산] {symbol} 현재가 {current_price:.4f} <= SL {sl_price:.4f}")
+            close_position(symbol, side)
+            closed.append(pos)
+            continue
+        elif side.upper() == "SELL" and current_price <= tp_price:
+            logging.warning(f"[익절청산] {symbol} 현재가 {current_price:.4f} <= TP {tp_price:.4f}")
+            close_position(symbol, side)
+            closed.append(pos)
+            continue
+        elif side.upper() == "SELL" and current_price >= sl_price:
+            logging.warning(f"[손절청산] {symbol} 현재가 {current_price:.4f} >= SL {sl_price:.4f}")
+            close_position(symbol, side)
+            closed.append(pos)
+            continue
+
+        # 조건 반전 청산
         try:
             if hasattr(strat, "check_exit") and strat.check_exit(symbol, entry_price, side):
                 logging.warning(f"[신호 무효화] {symbol} → 조건 반전으로 청산")
