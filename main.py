@@ -12,7 +12,8 @@ from strategy_ema_cross import StrategyEMACross
 from strategy_holy_grail import StrategyHolyGrail
 from risk_config import MAX_POSITIONS
 from trade_summary import start_daily_file_sender
-from position_manager import load_positions, POSITIONS_TO_MONITOR, start_order_cleanup_loop
+from position_manager import load_positions, start_order_cleanup_loop
+from order_manager import POSITIONS_TO_MONITOR
 
 start_daily_file_sender()
 
