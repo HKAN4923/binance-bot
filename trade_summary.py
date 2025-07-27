@@ -78,12 +78,12 @@ def start_summary_scheduler() -> None:
         while True:
             try:
                 send_telegram()
-                # 그래프 생략됨
             except Exception as e:
                 logging.error(f"[오류] 요약 전송 실패: {e}")
-            time.sleep(2 * 60 * 60)
+            time.sleep(2 * 60 * 60)  # 2시간
 
     threading.Thread(target=_worker, daemon=True).start()
+
 
 def send_trade_file_daily():
     """trades.json 파일을 하루 1회 텔레그램으로 전송"""
@@ -93,6 +93,7 @@ def send_trade_file_daily():
         logging.info("[전송] trades.json 파일 텔레그램 전송 완료")
     except Exception as e:
         logging.error(f"[오류] 거래 로그 전송 실패: {e}")
+
 
 def start_daily_file_sender():
     """매일 자정에 trades.json 파일 텔레그램으로 전송"""

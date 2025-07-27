@@ -10,7 +10,6 @@ load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
 API_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 
@@ -46,3 +45,20 @@ def send_photo(photo_path: str, caption: str = "") -> None:
             logging.info("[텔레그램] 이미지 전송 성공")
     except Exception as e:
         logging.error(f"[텔레그램] 이미지 전송 실패: {e}")
+
+
+def send_document(file_obj, filename: str = "log.json") -> None:
+    """텔레그램 파일 전송 (trades.json 등)"""
+    if not TOKEN or not CHAT_ID:
+        logging.warning("[텔레그램] 설정 정보 없음 - 파일 전송 생략")
+        return
+
+    try:
+        url = f"{API_URL}/sendDocument"
+        files = {"document": (filename, file_obj)}
+        data = {"chat_id": CHAT_ID}
+        response = requests.post(url, files=files, data=data, timeout=15)
+        response.raise_for_status()
+        logging.info("[텔레그램] 파일 전송 성공")
+    except Exception as e:
+        logging.error(f"[텔레그램] 파일 전송 실패: {e}")

@@ -49,15 +49,17 @@ def remove_position(position: Dict[str, Any]) -> None:
         pos.remove(position)
         _save()
     except ValueError:
-        pass
+        logging.warning(f"[기록 제거 실패] 존재하지 않는 포지션: {position}")
 
 def is_duplicate(symbol: str, strategy_name: str) -> bool:
+    """기록 파일 기준 중복 진입 방지"""
     for p in _load_positions():
         if p["symbol"] == symbol and p["strategy"] == strategy_name:
             return True
     return False
 
 def is_in_cooldown(symbol: str, strategy_name: str) -> bool:
+    """진입 쿨다운 시간 내 재진입 방지"""
     now = datetime.utcnow()
     for p in _load_positions():
         if p["symbol"] == symbol and p["strategy"] == strategy_name and "entry_time" in p:

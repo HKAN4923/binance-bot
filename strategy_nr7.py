@@ -2,13 +2,12 @@
  - 최근 7봉 중 가장 좁은 범위 대신, 평균 대비 좁은 봉으로 완화
  - 한국/중국/미국 장 시작 시간대에만 진입
  - 동일 심볼 하루 최대 3회 진입
+ - 신호 반전 시 청산 (open > close 기준)
 """
 
 import datetime
 import pandas as pd
-from utils import to_kst
-from binance_client import client
-
+from utils import to_kst, get_candles
 
 class StrategyNR7:
     name = "NR7"
@@ -36,20 +35,22 @@ class StrategyNR7:
             return None
 
         try:
-            df = client.futures_klines(symbol=symbol, interval="15m", limit=8)
-            df = pd.DataFrame(df, columns=[
-                "time", "open", "high", "low", "close", "volume",
-                "_", "_", "_", "_", "_", "_"
-            ])
-            df["high"] = df["high"].astype(float)
-            df["low"] = df["low"].astype(float)
-            df["range"] = df["high"] - df["low"]
+            candles = get_candles(symbol, interval="15m", limit=8)
+            if len(candles) < 8:
+                return None
 
-            # ✅ NR7 완화 조건: 최근 1봉이 평균보다 25% 이상 좁은 봉이면 진입
-            avg_range = df["range"].iloc[:-1].mean()
-            if df["range"].iloc[-1] < avg_range * 0.75:
-                side = "LONG" if df["close"].iloc[-1] > df["open"].iloc[-1] else "SHORT"
-                price = float(df["close"].iloc[-1])
+            highs = [float(c[2]) for c in candles]
+            lows = [float(c[3]) for c in candles]
+            opens = [float(c[1]) for c in candles]
+            closes = [float(c[4]) for c in candles]
+
+            ranges = [h - l for h, l in zip(highs, lows)]
+            avg_range = sum(ranges[:-1]) / len(ranges[:-1])
+            curr_range = ranges[-1]
+
+            if curr_range < avg_range * 0.75:
+                side = "LONG" if closes[-1] > opens[-1] else "SHORT"
+                price = closes[-1]
 
                 self.entry_counter.setdefault(symbol, {}).setdefault(date_str, 0)
                 self.entry_counter[symbol][date_str] += 1
@@ -66,12 +67,21 @@ class StrategyNR7:
         return None
 
     def check_exit(self, symbol: str, entry_side: str) -> bool:
-        """신호 무효화: 반대 방향 돌파 발생 시 청산"""
-        breakout_up = random.random() < 0.5
-        breakout_down = random.random() < 0.5
+        """신호 무효화 기준: 반대 방향 캔들 출현 (open > close)"""
+        try:
+            candles = get_candles(symbol, interval="15m", limit=2)
+            if len(candles) < 2:
+                return False
 
-        if entry_side == "LONG" and breakout_down:
-            return True
-        if entry_side == "SHORT" and breakout_up:
-            return True
-        return False
+            open_price = float(candles[-1][1])
+            close_price = float(candles[-1][4])
+
+            if entry_side == "LONG" and close_price < open_price:
+                return True
+            if entry_side == "SHORT" and close_price > open_price:
+                return True
+            return False
+
+        except Exception as e:
+            print(f"[NR7 청산 오류] {symbol} 오류: {e}")
+            return False

@@ -13,7 +13,7 @@ class StrategyORB:
     def __init__(self, symbols):
         self.name = "ORB"
         self.symbols = symbols
-        self.open_ranges = {}
+        self.open_ranges = {}  # {symbol_date_key: (high, low)}
 
     def check_entry(self, symbol):
         try:
@@ -45,7 +45,6 @@ class StrategyORB:
                 logging.info(f"[ORB] {symbol} → 하단 돌파 (short)")
                 return {"symbol": symbol, "side": "SHORT"}
 
-            logging.debug(f"[ORB] {symbol} → 돌파 없음: price={current_price:.4f}, 기준: {open_high:.4f}/{open_low:.4f}")
             return None
 
         except Exception as e:
@@ -53,9 +52,10 @@ class StrategyORB:
             return None
 
     def check_exit(self, symbol, entry_side):
+        """반대 방향 돌파 발생 시 신호 무효화"""
         try:
-            candles = get_candles(symbol, interval="5m", limit=2)
-            if len(candles) < 2:
+            candles = get_candles(symbol, interval="5m", limit=3)
+            if len(candles) < 3:
                 return False
 
             highs = [float(c[2]) for c in candles]
