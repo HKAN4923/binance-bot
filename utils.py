@@ -1,6 +1,7 @@
 import math
 import logging
 import numpy as np
+from datetime import datetime, timezone, timedelta
 from binance_client import client
 
 # ✅ 캔들 조회 함수 (기본: 5m)
@@ -19,7 +20,7 @@ def get_price(symbol: str):
         logging.error(f"[utils] 가격 조회 오류: {symbol} - {e}")
         return None
 
-# ✅ EMA 계산 함수 (단순 평균 기반 대체 버전)
+# ✅ EMA 계산 함수 (지수 이동 평균)
 def calculate_ema(values, period):
     if len(values) < period:
         return None
@@ -101,3 +102,10 @@ def cancel_all_orders(symbol: str):
         client.futures_cancel_all_open_orders(symbol=symbol)
     except Exception as e:
         logging.error(f"[utils] 주문 취소 오류: {symbol} - {e}")
+
+# ✅ UTC → KST 변환 함수
+def to_kst(dt: datetime) -> datetime:
+    """UTC datetime을 KST(UTC+9)로 변환"""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone(timedelta(hours=9)))
