@@ -3,6 +3,7 @@ import logging
 import numpy as np
 from datetime import datetime, timezone, timedelta
 from binance_client import client
+from risk_config import CAPITAL_USAGE  # ✅ 자산 비율 설정 연동
 
 # ✅ 캔들 조회 함수 (기본: 5m)
 def get_candles(symbol: str, interval: str = "5m", limit: int = 100):
@@ -85,18 +86,17 @@ def get_futures_balance():
         logging.error(f"[utils] 잔고 조회 오류: {e}")
         return 0.0
 
-# ✅ 수량 계산 함수 (자산의 20%)
+# ✅ 수량 계산 함수 (자산의 설정 비율)
 def calculate_order_quantity(symbol: str, price: float, balance: float):
     try:
-        portion = 0.2  # 자산의 20%
-        usdt_amount = balance * portion
+        usdt_amount = balance * CAPITAL_USAGE
         quantity = usdt_amount / price
         return quantity
     except Exception as e:
         logging.error(f"[utils] 수량 계산 오류: {e}")
         return 0.0
 
-# ✅ 모든 미체결 주문 취소 (로깅 없음)
+# ✅ 모든 미체결 주문 취소
 def cancel_all_orders(symbol: str):
     try:
         client.futures_cancel_all_open_orders(symbol=symbol)
