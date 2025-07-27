@@ -168,5 +168,103 @@ def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
         logging.error(f"[오류] 진입 주문 실패: {e}")
 
 
-# ✅ monitor_positions 함수는 기존에 제공한 것 그대로 사용하시면 됩니다.
-# 이미 감시 구조, TP/SL, 타임컷, 신호 무효화 모두 정상 처리되도록 설계되어 있습니다.
+def monitor_positions():
+    try:
+        open_positions = client.futures_position_information()
+        tracked_positions = get_positions_from_log()
+
+        for pos in open_positions:
+            amt = float(pos["positionAmt"])
+            if amt == 0:
+                continue
+
+            symbol = pos["symbol"]
+            side = "BUY" if amt > 0 else "SELL"
+            entry_side = "LONG" if amt > 0 else "SHORT"
+
+            match = next((p for p in tracked_positions if p["symbol"] == symbol and p["side"] == side), None)
+            if not match:
+                logging.warning(f"[감시제외] {symbol} 전략정보 없음 (포지션은 존재함)")
+                continue
+
+            strategy = match["strategy"]
+            entry_price = float(match["entry_price"])
+            entry_time = datetime.fromisoformat(match["entry_time"])
+            now = datetime.utcnow()
+
+            ticker = client.futures_symbol_ticker(symbol=symbol)
+            current_price = float(ticker["price"])
+
+            elapsed_min = int((now - entry_time).total_seconds() / 60)
+            logging.info(f"[감시중] {symbol} 전략: {strategy} | 진입가: {entry_price:.4f} | 현재가: {current_price:.4f} | 경과: {elapsed_min}분")
+
+            settings = TP_SL_SETTINGS.get(strategy.upper(), {})
+            tp_pct = settings.get("tp", 0.02)
+            sl_pct = settings.get("sl", 0.01)
+
+            if side == "BUY":
+                tp_price = entry_price * (1 + tp_pct)
+                sl_price = entry_price * (1 - sl_pct)
+                is_tp_hit = current_price >= tp_price
+                is_sl_hit = current_price <= sl_price
+            else:
+                tp_price = entry_price * (1 - tp_pct)
+                sl_price = entry_price * (1 + sl_pct)
+                is_tp_hit = current_price <= tp_price
+                is_sl_hit = current_price >= sl_price
+
+            if is_tp_hit:
+                logging.info(f"[TP] {symbol} {strategy} TP 도달 → 시장가 청산")
+                cancel_all_orders(symbol)
+                client.futures_create_order(symbol=symbol, side="SELL" if side == "BUY" else "BUY",
+                                            type="MARKET", quantity=abs(amt), reduceOnly=True)
+                remove_position(match)
+                send_exit_summary(symbol, strategy, "TP 도달", entry_price, current_price, entry_time, side)
+                continue
+
+            if is_sl_hit:
+                logging.info(f"[SL] {symbol} {strategy} SL 도달 → 시장가 청산")
+                cancel_all_orders(symbol)
+                client.futures_create_order(symbol=symbol, side="SELL" if side == "BUY" else "BUY",
+                                            type="MARKET", quantity=abs(amt), reduceOnly=True)
+                remove_position(match)
+                send_exit_summary(symbol, strategy, "SL 도달", entry_price, current_price, entry_time, side)
+                continue
+
+            from strategy_orb import StrategyORB
+            from strategy_nr7 import StrategyNR7
+            from strategy_ema_cross import StrategyEMACross
+            from strategy_holy_grail import StrategyHolyGrail
+
+            strategy_map = {
+                "ORB": StrategyORB([]),
+                "NR7": StrategyNR7([]),
+                "EMA": StrategyEMACross([]),
+                "HOLY_GRAIL": StrategyHolyGrail([]),
+            }
+
+            strat_obj = strategy_map.get(strategy.upper())
+            if strat_obj and hasattr(strat_obj, "check_exit"):
+                try:
+                    if strat_obj.check_exit(symbol, entry_side):
+                        logging.info(f"[무효화] {symbol} {strategy} 신호 반전 → 시장가 청산")
+                        cancel_all_orders(symbol)
+                        client.futures_create_order(symbol=symbol, side="SELL" if side == "BUY" else "BUY",
+                                                    type="MARKET", quantity=abs(amt), reduceOnly=True)
+                        remove_position(match)
+                        send_exit_summary(symbol, strategy, "신호 무효화", entry_price, current_price, entry_time, side)
+                        continue
+                except Exception as e:
+                    logging.error(f"[감시 오류] {symbol} {strategy} 신호판단 실패: {e}")
+
+            max_minutes = TIME_CUT_BY_STRATEGY.get(strategy.upper(), 120)
+            if (now - entry_time).total_seconds() > max_minutes * 60:
+                logging.info(f"[타임컷] {symbol} 전략 {strategy} 시간 초과 → 시장가 청산")
+                cancel_all_orders(symbol)
+                client.futures_create_order(symbol=symbol, side="SELL" if side == "BUY" else "BUY",
+                                            type="MARKET", quantity=abs(amt), reduceOnly=True)
+                remove_position(match)
+                send_exit_summary(symbol, strategy, "시간 초과", entry_price, current_price, entry_time, side)
+
+    except Exception as e:
+        logging.error(f"[감시 오류] 포지션 감시 중 오류 발생: {e}")
