@@ -23,7 +23,7 @@ def send_exit_summary(symbol, strategy, reason, entry_price, current_price, entr
         ]
 
         if entry_price == 0:
-            logging.warning(f"[[\uc청산경고] {symbol} entry_price가 0입니다. 손익률 계산 생략")
+            logging.warning(f"[청산경고] {symbol} entry_price가 0입니다. 손익률 계산 생략")
             lines.append("❗ 체계가 0으로 손익률 계산 불가")
         else:
             side_factor = 1 if side == "BUY" else -1
@@ -55,7 +55,7 @@ def send_exit_summary(symbol, strategy, reason, entry_price, current_price, entr
         send_message("\n".join(lines))
 
     except Exception as e:
-        logging.error(f"[토플] ] \uc청산 메시지 전송 실패: {e}")
+        logging.error(f"[토플] 청산 메시지 전송 실패: {e}")
 
 def place_entry_order(symbol: str, side: str, strategy_name: str) -> None:
     try:
