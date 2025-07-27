@@ -1,27 +1,33 @@
+# ✅ WebSocket 가격 fallback 적용된 utils.py 전체 통합본
+
 import math
 import logging
 import numpy as np
 from datetime import datetime, timezone, timedelta
 from binance_client import client
-from risk_config import CAPITAL_USAGE  # ✅ 자산 비율 설정 연동
+from price_ws import get_price as ws_price  # ✅ 실시간 가격 fallback
+from risk_config import CAPITAL_USAGE
 
-# ✅ 캔들 조회 함수 (기본: 5m)
 def get_candles(symbol: str, interval: str = "5m", limit: int = 100):
     try:
         return client.futures_klines(symbol=symbol, interval=interval, limit=limit)
     except Exception as e:
-        logging.error(f"[utils] 캔들 조회 오류: {symbol} - {e}")
+        logging.error(f"[utils] 칸들 조회 오류: {symbol} - {e}")
         return []
 
-# ✅ 현재가 조회 함수
 def get_price(symbol: str):
     try:
-        return float(client.futures_symbol_ticker(symbol=symbol)['price'])
+        ticker = client.futures_symbol_ticker(symbol=symbol)
+        price = ticker.get("price")
+        if price is None:
+            fallback = ws_price(symbol)
+            logging.warning(f"[REST 실패] {symbol} → WebSocket 가격 대체: {fallback}")
+            return fallback
+        return float(price)
     except Exception as e:
         logging.error(f"[utils] 가격 조회 오류: {symbol} - {e}")
-        return None
+        return ws_price(symbol)
 
-# ✅ EMA 계산 함수 (지수 이동 평균)
 def calculate_ema(values, period):
     if len(values) < period:
         return None
@@ -31,7 +37,6 @@ def calculate_ema(values, period):
     a[:period] = a[period]
     return list(a)
 
-# ✅ RSI 계산 함수 (14 기준)
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1:
         return None
@@ -50,7 +55,6 @@ def calculate_rsi(prices, period=14):
         rsi.append(100 - 100 / (1 + rs))
     return rsi
 
-# ✅ 수량 반올림 함수
 def round_quantity(symbol: str, qty: float):
     try:
         info = client.futures_exchange_info()
@@ -63,7 +67,6 @@ def round_quantity(symbol: str, qty: float):
         logging.error(f"[utils] 수량 반올림 오류: {symbol} - {e}")
     return qty
 
-# ✅ 가격 반올림 함수
 def round_price(symbol: str, price: float):
     try:
         info = client.futures_exchange_info()
@@ -76,17 +79,15 @@ def round_price(symbol: str, price: float):
         logging.error(f"[utils] 가격 반올림 오류: {symbol} - {e}")
     return price
 
-# ✅ 잔고 조회 함수
 def get_futures_balance():
     try:
         balances = client.futures_account_balance()
         usdt = next((b for b in balances if b['asset'] == 'USDT'), None)
         return float(usdt['balance']) if usdt else 0.0
     except Exception as e:
-        logging.error(f"[utils] 잔고 조회 오류: {e}")
+        logging.error(f"[utils] 장복 조회 오류: {e}")
         return 0.0
 
-# ✅ 수량 계산 함수 (자산의 설정 비율)
 def calculate_order_quantity(symbol: str, price: float, balance: float):
     try:
         usdt_amount = balance * CAPITAL_USAGE
@@ -96,16 +97,13 @@ def calculate_order_quantity(symbol: str, price: float, balance: float):
         logging.error(f"[utils] 수량 계산 오류: {e}")
         return 0.0
 
-# ✅ 모든 미체결 주문 취소
 def cancel_all_orders(symbol: str):
     try:
         client.futures_cancel_all_open_orders(symbol=symbol)
     except Exception as e:
         logging.error(f"[utils] 주문 취소 오류: {symbol} - {e}")
 
-# ✅ UTC → KST 변환 함수
 def to_kst(dt: datetime) -> datetime:
-    """UTC datetime을 KST(UTC+9)로 변환"""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone(timedelta(hours=9)))
