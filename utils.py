@@ -1,32 +1,28 @@
-# ✅ WebSocket 가격 fallback 적용된 utils.py 전체 통합본
-
 import math
 import logging
 import numpy as np
 from datetime import datetime, timezone, timedelta
 from binance_client import client
-from price_ws import get_price as ws_price  # ✅ 실시간 가격 fallback
+from price_ws import get_price as ws_price, is_price_ready
 from risk_config import CAPITAL_USAGE
 
 def get_candles(symbol: str, interval: str = "5m", limit: int = 100):
     try:
         return client.futures_klines(symbol=symbol, interval=interval, limit=limit)
     except Exception as e:
-        logging.error(f"[utils] 칸들 조회 오류: {symbol} - {e}")
+        logging.error(f"[utils] 캔들 조회 오류: {symbol} - {e}")
         return []
 
 def get_price(symbol: str):
+    """WebSocket 우선 가격 조회 + 유효성 체크"""
     try:
-        ticker = client.futures_symbol_ticker(symbol=symbol)
-        price = ticker.get("price")
-        if price is None:
-            fallback = ws_price(symbol)
-            logging.warning(f"[REST 실패] {symbol} → WebSocket 가격 대체: {fallback}")
-            return fallback
-        return float(price)
+        price = ws_price(symbol)
+        if price == 0.0:
+            logging.warning(f"[가격 경고] {symbol} WebSocket 가격이 0입니다")
+        return price
     except Exception as e:
-        logging.error(f"[utils] 가격 조회 오류: {symbol} - {e}")
-        return ws_price(symbol)
+        logging.error(f"[utils] 가격 조회 실패: {symbol} - {e}")
+        return 0.0
 
 def calculate_ema(values, period):
     if len(values) < period:
@@ -85,16 +81,19 @@ def get_futures_balance():
         usdt = next((b for b in balances if b['asset'] == 'USDT'), None)
         return float(usdt['balance']) if usdt else 0.0
     except Exception as e:
-        logging.error(f"[utils] 장복 조회 오류: {e}")
+        logging.error(f"[utils] 잔고 조회 오류: {e}")
         return 0.0
 
 def calculate_order_quantity(symbol: str, price: float, balance: float):
     try:
+        if price <= 0:
+            logging.error(f"[utils] 수량 계산 오류: {symbol} - 가격이 0 또는 음수")
+            return 0.0
         usdt_amount = balance * CAPITAL_USAGE
         quantity = usdt_amount / price
         return quantity
     except Exception as e:
-        logging.error(f"[utils] 수량 계산 오류: {e}")
+        logging.error(f"[utils] 수량 계산 오류: {symbol} - {e}")
         return 0.0
 
 def cancel_all_orders(symbol: str):

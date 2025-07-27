@@ -9,7 +9,7 @@ from strategy_holy_grail import StrategyHolyGrail
 
 from order_manager import place_entry_order, monitor_positions
 from position_manager import can_enter, is_duplicate, is_in_cooldown, get_positions
-from price_ws import start_price_ws
+from price_ws import start_price_ws, is_price_ready
 from trade_summary import start_summary_scheduler, start_daily_file_sender
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -31,8 +31,21 @@ if EMA_ENABLED:
 if HOLY_GRAIL_ENABLED:
     strategies.append(StrategyHolyGrail(SYMBOL_LIST))
 
+def wait_for_prices():
+    """WebSocket 가격이 들어올 때까지 대기"""
+    for symbol in SYMBOL_LIST:
+        attempts = 0
+        while not is_price_ready(symbol):
+            logging.info(f"[대기] {symbol} 가격 수신 대기 중...")
+            time.sleep(0.2)
+            attempts += 1
+            if attempts > 100:
+                logging.warning(f"[경고] {symbol} 가격 수신 지연 - WebSocket 확인 필요")
+                break
+
 def main_loop():
     start_price_ws(SYMBOL_LIST)
+    wait_for_prices()
     start_summary_scheduler()
     start_daily_file_sender()
     logging.info("[봇 시작] 실시간 WebSocket 수신, 요약 전송 스케줄러 시작됨")
@@ -68,7 +81,6 @@ def main_loop():
 
         except Exception as e:
             logging.error(f"[메인 루프 오류] {e}")
-
 
 if __name__ == "__main__":
     main_loop()
