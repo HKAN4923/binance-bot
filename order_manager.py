@@ -17,7 +17,7 @@ def send_exit_summary(symbol, strategy, reason, entry_price, current_price, entr
         now = datetime.utcnow()
         elapsed_min = int((now - entry_time).total_seconds() / 60)
         lines = [
-            f"✅ [ [\uc청산] {strategy} 전략 - {symbol}",
+            f"✅ [청산] {strategy} 전략 - {symbol}",
             f"🎯 사유: {reason}",
             f"⏱ 경간: {elapsed_min}분",
         ]
